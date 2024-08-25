@@ -16,5 +16,13 @@
     "eslint-plugin-roblox-ts": "^0.0.36",
     "roblox-ts": "^2.3.0",
     "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "@rbxts/beacon": "^2.1.1",
+    "@rbxts/charm": "^0.5.3",
+    "@rbxts/janitor": "^1.16.0-ts.0",
+    "@rbxts/roact": "^1.4.4-ts.0",
+    "@rbxts/signal": "^1.1.1",
+    "@rbxts/topbar-plus": "^3.0.2-ts.2"
   }
 }
