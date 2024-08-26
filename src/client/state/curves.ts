@@ -1,8 +1,6 @@
 import { Signal } from "@rbxts/beacon";
-import { BezierCurveDisplay } from "./curve";
+import { BezierCurveDisplay } from "client/curve";
 import { SignalView } from "shared/util";
-import { SubscribableRememberingStore, SubscribableStore } from "./util";
-import { Point } from "./point";
 
 export class CurveStore {
 	private readonly Curves: BezierCurveDisplay[] = [];
@@ -17,7 +15,7 @@ export class CurveStore {
 }
 
 function ready(): Promise<void> {
-	const loaded = script.Parent!.WaitForChild("curve-worker").WaitForChild("Loaded") as BoolValue;
+	const loaded = script.Parent!.Parent!.WaitForChild("curve-worker").WaitForChild("Loaded") as BoolValue;
 	return new Promise((resolve) => {
 		const connection = loaded.GetPropertyChangedSignal("Value").Connect(() => {
 			if (loaded.Value) resolve();
@@ -35,3 +33,4 @@ ready().then(() => {
 		new Vector3(  5, 3, -10),
 	]))
 })
+

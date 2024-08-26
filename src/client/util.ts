@@ -1,40 +1,46 @@
-import { Signal } from "@rbxts/beacon";
-import { SignalView } from "shared/util";
+import { CollisionGroup } from "shared/util";
+import { Point } from "./point";
 
 const player = game.GetService("Players").LocalPlayer;
+const mouse = player.GetMouse();
+
+const PhysicsService = game.GetService("PhysicsService")
+const Players = game.GetService("Players")
 
 export function get_character(): Model {
 	return player.Character ?? player.CharacterAdded.Wait()[0];
 }
 
-export class SubscribableRememberingStore<T> {
-	private readonly SignalController = new Signal<[new: T, old: T]>()
-	public readonly Signal = this.SignalController as SignalView<[new: T, old: T]>
-	private State: T;
-	constructor (value: T) { this.State = value }
-	public Set(value: T) {
-		const old = this.State;
-		this.State = value;
-		if (value !== old) this.SignalController.Fire(value, old);
+export function every_character_descendent(callback: (instance: Instance) => void): RBXScriptConnection {
+	function watch_player(player: Player) {
+		let descendant_added: RBXScriptConnection | undefined
+		const character_created = player.CharacterAdded.Connect((character) => {
+			descendant_added?.Disconnect();
+			descendant_added = character.DescendantAdded.Connect((instance) => callback(instance));
+			character.GetDescendants().forEach((instance) => callback(instance))
+		});
+		player.Destroying.Once(() => {
+			descendant_added?.Disconnect();
+			character_created.Disconnect();
+		})
 	}
-	public Get(): T {
-		return this.State
-	}
+
+	const connection = Players.PlayerAdded.Connect((player) => watch_player(player))
+	for (const player of Players.GetPlayers()) watch_player(player);
+	return connection
 }
 
-export class SubscribableStore<T> {
-	private readonly SignalController = new Signal<[T]>()
-	public readonly Signal = this.SignalController as SignalView<[T]>
-	private State: T;
-	constructor (value: T) { this.State = value }
-	public Set(value: T) {
-		const old = this.State;
-		this.State = value;
-		if (value !== old) this.SignalController.Fire(value);
+every_character_descendent((instance) => {
+	if (instance.IsA("BasePart")) {
+		instance.CollisionGroup = CollisionGroup.Character
 	}
-	public Get(): T {
-		return this.State
-	}
-}
+})
 
+const point_ray_params = new RaycastParams();
+point_ray_params.CollisionGroup = CollisionGroup.PointRay
+export function get_point_on_cursor (ray_distance = 100): Point | undefined {
+	const hit = game.Workspace.Raycast(mouse.Origin.Position, mouse.Origin.LookVector.mul(ray_distance), point_ray_params)
+	if (!hit) return undefined;
+	if (Point.TestInstance(hit.Instance)) return Point.GetPointFromInstance(hit.Instance);
+}
 

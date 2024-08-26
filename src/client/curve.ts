@@ -4,29 +4,13 @@ import { bezier, bezier_length } from "shared/bezier";
 import { evaluate_color_sequence, round, SignalView } from "shared/util";
 import { Point } from "./point";
 import { BoundCompute } from "./curve-worker.client";
-import { SubscribableRememberingStore, SubscribableStore } from "./util";
-
-
-export const active_point = new SubscribableRememberingStore<Point | undefined>(undefined)
-
-export const use_sound_effects = new SubscribableStore(true);
-
-const SharedTableRegistry = game.GetService("SharedTableRegistry");
-
-
-// const destinations_shared = new SharedTable() as SharedTable & Array<SharedTable & CFrame[]>
-// SharedTableRegistry.SetSharedTable("Destinations", destinations_shared);
-
-
-const output = new SharedTable(table.create(1000)) as SharedTable & Array<SharedTable & unknown[]>
-SharedTableRegistry.SetSharedTable("Output", output);
+import { selected_point } from "./state/selected_point";
+import { use_sound_effects } from "./state/sfx";
 
 const actors = script.Parent!
 	.WaitForChild("curve-worker")!
 	.WaitForChild("Actors")!
 	.GetChildren() as Actor[];
-
-// const actors = game.Workspace.WaitForChild("Actors").GetChildren() as Actor[]
 
 const worker_job_done_signal = new Instance("BindableEvent");
 worker_job_done_signal.Parent = game.Workspace;
@@ -119,7 +103,7 @@ export class BezierCurveDisplay {
 	private Resolution: number = 0;
 	public GetResolution() { return this.Resolution }
 	public SetResolution(resolution: number) {
-		if (resolution <= 0) error("naughty!") // TODO: handle better
+		if (resolution <= 0) error("Bad resolution!") // TODO: handle better
 		const old = this.Resolution;
 		this.Resolution = resolution;
 		const diff = resolution - old;
@@ -260,7 +244,7 @@ export class BezierCurveDisplay {
 	private LastActivePosition = Vector3.zero;
 	private PlayTickSFX() {
 		if (use_sound_effects.Get()) {
-			const part = active_point.Get()?.Instance;
+			const part = selected_point.Get()?.Instance;
 			if (!part) return;
 			const now = tick();
 			const since = now - this.LastSFXPlayed;
@@ -270,7 +254,7 @@ export class BezierCurveDisplay {
 			if (since < math.max(0.05, .1 - travel)) return;
 			this.LastSFXPlayed = now;
 			const sound = BezierCurveDisplay.TickAudio.Clone();
-			sound.PlaybackSpeed = math.clamp(0.9 + travel * 2, 0.7, 1.3)
+			sound.PlaybackSpeed = math.clamp(0.9 + travel * 2, 0.7, 1.3) + (math.random() / (4 + travel * 3) - 0.125)
 			sound.TimePosition = 0.2;
 			sound.Ended.Once(() => sound.Destroy());
 			sound.Parent = part;
@@ -348,12 +332,7 @@ export class BezierCurveDisplay {
 
 					if (this.Style === BezierCurveDisplay.VisualColorDataSource.Velocity) {
 						for (const i of $range(0, this.Resolution - 1)) {
-							const t = velocities![i] / max_velocity;
-							if (t === 0 || t > 1 || t !== t || max_velocity === 0) {
-								print(t, max_velocity, evaluate_color_sequence(gradient, velocities![i] / max_velocity))
-
-							}
-							this.PathInstances[i].Color = evaluate_color_sequence(gradient, t)
+							this.PathInstances[i].Color = evaluate_color_sequence(gradient, velocities![i] / max_velocity)
 						}
 					}
 

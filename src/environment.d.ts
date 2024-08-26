@@ -5,3 +5,4 @@ interface Instance {
 	 */
     Remove(): void
 }
+

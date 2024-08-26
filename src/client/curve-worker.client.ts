@@ -1,7 +1,5 @@
 //!native
 import { bezier } from "shared/bezier";
-import { BezierCurveDisplay } from "./curve";
-import { evaluate_color_sequence } from "shared/util";
 
 const actor = script.GetActor();
 

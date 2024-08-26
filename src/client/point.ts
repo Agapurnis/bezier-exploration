@@ -1,5 +1,19 @@
+import { selected_point } from "./state/selected_point";
+
 const player = game.GetService("Players").LocalPlayer;
 const player_gui = player.WaitForChild("PlayerGui") as PlayerGui;
+
+const TweenService = game.GetService("TweenService");
+
+const WHITE = new Color3(1, 1, 1)
+
+interface HighlightTransitionDetails {
+	TweenInfo: TweenInfo,
+	Properties: Pick<Highlight,
+		| "OutlineTransparency"
+		|    "FillTransparency"
+	>;
+}
 
 export class Point {
 	private static readonly Template = new Instance("Part") as Point.Instance;
@@ -18,7 +32,12 @@ export class Point {
 		const drag = new Instance("DragDetector", this.Template);
 		drag.RunLocally = true;
 		drag.DragStyle = Enum.DragDetectorDragStyle.BestForDevice;
-		drag.MaxActivationDistance = 1_000
+		drag.MaxActivationDistance = 1_000;
+		const highlight = new Instance("Highlight", this.Template);
+		highlight.FillColor = WHITE;
+		highlight.FillTransparency = 1
+		highlight.OutlineColor = WHITE;
+		highlight.OutlineTransparency = 1
 	}
 
 	public static TestInstance(value: unknown): value is Point.Instance {
@@ -33,6 +52,37 @@ export class Point {
 	private readonly OnMovementBindable: BindableEvent<(position: CFrame) => void> = new Instance("BindableEvent");
 	public readonly OnMovement = this.OnMovementBindable.Event
 	public readonly Instance: Point.Instance;
+
+	public IsSelected() {
+		return selected_point.Get() === this;
+	}
+
+	private Held = false;
+	private Hovered = false;
+	private HighlightTween?: Tween | undefined;
+	public TweenHighlight(details = this.EvaluateHighlightTransitionTarget()) {
+		this.HighlightTween?.Destroy()
+		this.HighlightTween = TweenService.Create(this.Instance.Highlight, details.TweenInfo, details.Properties)
+		this.HighlightTween.Completed.Once(() => this.HighlightTween?.Destroy())
+		this.HighlightTween.Play();
+	}
+	public AdjustHighlight(state_adjustment: Point.StateHighlightModifier, state: boolean) {
+		if (state_adjustment === Point.StateHighlightModifier.Held) { if (this.Held === state) return; this.Held = state; }
+		if (state_adjustment === Point.StateHighlightModifier.Hover) { if (this.Hovered === state) return; this.Hovered = state; }
+		this.TweenHighlight()
+	}
+
+	private EvaluateHighlightTransitionTarget(): HighlightTransitionDetails {
+		if (!this.IsSelected()) {
+			if (this.Held) error("Bad state!")
+			if (this.Hovered) return HighlightConfigurations.HOVERED_NON_SELECTED;
+			return HighlightConfigurations.INVISIBLE
+		} else {
+			if (this.Held) return HighlightConfigurations.SELECTED_HELD
+			if (this.Hovered) return HighlightConfigurations.SELECTED_HOVERED
+			return HighlightConfigurations.SELECTED
+		}
+	}
 
 	constructor (
 		position: Vector3,
@@ -117,11 +167,53 @@ export namespace Point {
 	export interface Instance extends Part {
 		Attachment: Attachment,
 		Beam: Beam,
-		DragDetector: DragDetector
+		DragDetector: DragDetector,
+		Highlight: Highlight
 	}
 	export const enum Appearance {
 		Control,
 		Terminal
 	}
+	export const enum StateHighlightModifier {
+		Hover = "Hover",
+		Held = "Held",
+	}
 }
 
+namespace HighlightConfigurations {
+	export const INVISIBLE: HighlightTransitionDetails = {
+		TweenInfo: new TweenInfo(.1),
+		Properties: {
+			OutlineTransparency: 1,
+			FillTransparency: 1
+		}
+	}
+	export const HOVERED_NON_SELECTED: HighlightTransitionDetails = {
+		TweenInfo: new TweenInfo(.1),
+		Properties: {
+			OutlineTransparency: .9,
+			FillTransparency: .9
+		}
+	}
+	export const SELECTED: HighlightTransitionDetails = {
+		TweenInfo: new TweenInfo(.1),
+		Properties: {
+			OutlineTransparency: .85,
+			FillTransparency: .85
+		}
+	}
+	export const SELECTED_HOVERED: HighlightTransitionDetails = {
+		TweenInfo: new TweenInfo(.1),
+		Properties: {
+			OutlineTransparency: .775,
+			FillTransparency: .775
+		}
+	}
+	export const SELECTED_HELD: HighlightTransitionDetails = {
+		TweenInfo: new TweenInfo(.1),
+		Properties: {
+			OutlineTransparency: .65,
+			FillTransparency: .65
+		}
+	}
+}
