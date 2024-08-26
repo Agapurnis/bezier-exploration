@@ -24,6 +24,10 @@ export class LabelledCheckbox {
 		this.Checked = checked;
 		if (checked !== old) this.ChangedController.Fire(checked)
 	}
+	public Toggle() {
+		this.Checked = !this.Checked;
+		this.ChangedController.Fire(this.Checked)
+	}
 
 	constructor(
 		public readonly Label: string,
@@ -35,6 +39,7 @@ export class LabelledCheckbox {
 		this.Instance = LabelledCheckbox.InstanceTemplate.Clone();
 		this.Instance.Name = name ?? Label;
 		this.Changed.Connect(() => this.UpdateText())
+		this.Instance.MouseButton1Up.Connect(() => this.Toggle())
 		this.UpdateText()
 		this.Instance.Parent = parent;
 		if (callback) this.Changed.Connect((checked) => callback(checked))
