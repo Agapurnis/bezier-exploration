@@ -4,25 +4,35 @@ import { make } from "shared/util";
 import { EditorPointsListItem } from "./EditorPointsListItem";
 import { selected_curve } from "client/state/selected_curve";
 
+// TODO: make clickable => focus
 export class EditorPointsList {
 	private static readonly InstanceTemplate = make("ScrollingFrame", {
 		Name: "Points List",
 		Position: UDim2.fromScale(0.2, 0),
-		Size: UDim2.fromScale(0.6, 1),
+		Size: new UDim2(0.6, 0, 1, -20),
+		VerticalScrollBarInset: Enum.ScrollBarInset.ScrollBar,
+		Children: {
+			Layout: new Instance("UIListLayout")
+		}
 	})
 
 	public Update(curve: BezierCurveDisplay, points?: ReadonlyArray<Point> | undefined): void
 	public Update(curve: undefined, points?: undefined): void
 	public Update(curve: BezierCurveDisplay | undefined): void
 	public Update(curve: BezierCurveDisplay | undefined, points?: ReadonlyArray<Point>) {
-		this.Instance.ClearAllChildren();
+		for (const index of $range(this.Items.size(), 1, -1)) {
+			this.Items[index - 1].Instance.Destroy()
+			delete this.Items[index - 1];
+		}
 		if (!curve) return;
-		new Instance("UIListLayout", this.Instance);
 		(points ?? curve.GetPoints()).forEach((point, index) => {
-			new EditorPointsListItem(point, curve, index).Instance.Parent = this.Instance;
+			const item = new EditorPointsListItem(point, curve, index);
+			item.Instance.Parent = this.Instance;
+			this.Items.push(item)
 		})
 	}
 
+	private readonly Items: Array<EditorPointsListItem> = [];
 	public readonly Instance: typeof EditorPointsList.InstanceTemplate;
 
 	constructor(parent: GuiBase | undefined) {

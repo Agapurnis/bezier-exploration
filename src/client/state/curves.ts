@@ -14,23 +14,9 @@ export class CurveStore {
 	}
 }
 
-function ready(): Promise<void> {
-	const loaded = script.Parent!.Parent!.WaitForChild("curve-worker").WaitForChild("Loaded") as BoolValue;
-	return new Promise((resolve) => {
-		const connection = loaded.GetPropertyChangedSignal("Value").Connect(() => {
-			if (loaded.Value) resolve();
-			connection.Disconnect();
-		})
-		if (loaded.Value) resolve();
-	})
-}
-
 export const curves = new CurveStore();
-ready().then(() => {
-	curves.AddCurve(new BezierCurveDisplay([
-		new Vector3( -5, 3, -10),
-		new Vector3(  0, 7, -10),
-		new Vector3(  5, 3, -10),
-	]))
-})
-
+curves.AddCurve(new BezierCurveDisplay([
+	new Vector3( -5, 3, -10),
+	new Vector3(  0, 7, -10),
+	new Vector3(  5, 3, -10),
+]))

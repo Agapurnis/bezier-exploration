@@ -21,28 +21,38 @@ export class EditorCurvesListItem {
 
 	public readonly Instance: typeof EditorCurvesListItem.InstanceTemplate;
 
+	private static readonly CurveMap = new WeakMap<BezierCurveDisplay, EditorCurvesListItem>();
+
+	public static UpdateOnceFor(curve: BezierCurveDisplay) {
+		this.CurveMap.get(curve)?.Update();
+	}
+
+	static {
+		let curve_update_connection: RBXScriptConnection | undefined
+		const new_selected_connection = selected_curve.Signal.Connect((curve, old) => {
+			this.CurveMap.get(old!)?.Update();
+			const selected = this.CurveMap.get(curve!);
+			if (selected) {
+				selected.Update();
+				curve_update_connection?.Disconnect();
+				curve_update_connection = curve!.OnUpdate.Connect(() => {
+					// This isn't a constant `true` since in the event of
+					selected.Update(selected_curve.Get() === curve)
+				})
+			}
+		});
+	}
+
 	constructor(public readonly Curve: BezierCurveDisplay) {
 		this.Instance = EditorCurvesListItem.InstanceTemplate.Clone();
 		this.Instance.MouseButton1Click.Connect(() => {
 			selected_curve.Set(this.IsSelected() ? undefined : this.Curve);
 		});
-
-		let curve_update_connection: RBXScriptConnection | undefined
-		const connection = selected_curve.Signal.Connect((new_curve) => {
-			const is_selected = this.IsSelected();
-			this.Update(is_selected);
-			if (is_selected) {
-				curve_update_connection?.Disconnect();
-				curve_update_connection = undefined;
-				if (new_curve) curve_update_connection = new_curve.OnRender.Connect(() => this.Update(true))
-			}
-		});
-
-		this.Instance.Destroying.Connect(() => connection.Destroy())
+		EditorCurvesListItem.CurveMap.set(Curve, this);
 		this.Update();
 	}
 }
 
-export namespace EditorPointsListItem {
+export namespace EditorCurvesListItem {
 	export type Instance = EditorCurvesListItem["Instance"]
 }

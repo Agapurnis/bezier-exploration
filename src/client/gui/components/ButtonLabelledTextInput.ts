@@ -6,6 +6,7 @@ export class ButtonLabelledTextInput {
 		Size: UDim2.fromOffset(100, 50),
 		Children: {
 			TextInput: make("TextBox", {
+				BackgroundColor3: new Color3(0.66, 0.66, 0.66),
 				Size: UDim2.fromScale(1, 3 / 5)
 			}),
 			Button: make("TextButton", {

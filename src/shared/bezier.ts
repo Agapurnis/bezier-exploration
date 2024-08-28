@@ -1,7 +1,15 @@
 //!native
 
 import { adaptive_guass_legendre_quadrature, gauss_legendre_quadrature } from "./integration";
+import { flerp, glerp } from "./internal/lerp";
 import { AddOp, ScalarMultiplyOp, SubtractOp } from "./ops";
+import { kahan } from "./sum";
+
+type   MutableBezierInput<T> = [start: T, ...control: Array<T>, end: T]
+type ImmutableBezierInput<T> = Readonly<MutableBezierInput<T>>
+export type BezierInput<T> =
+	| ImmutableBezierInput<T>
+	|   MutableBezierInput<T>
 
 /**
  * @see https://en.wikipedia.org/wiki/Triangular_number
@@ -10,56 +18,20 @@ function compute_nth_triangular_number(n: number) {
 	return (n * (n + 1)) / 2;
 }
 
-
-// /**
-//  * @param points the points to create a curve on: the first is the starting point, the last is the ending point, and those in-between are "control points"
-//  * @param progress the progress into the interpolation: at zero, it will return the starting position, and at one, it will return the ending position
-//  * @param derivative compute what derivative
-//  * @see https://en.wikipedia.org/wiki/B%C3%A9zier_curve
-//  */
-// export function bezier<T extends number |Interpolatable>(
-// 	points: MaybeReadonly<[start: T, ...control: Array<T>, end: T]>,
-// 	progress: number,
-// 	derivative = 0
-// ): T {
-// 	const degree = points.size() - 1;
-// 	const powers = generate_powers(progress, degree);
-// 	const coefficients = get_flattened_pascal_tetrahedron_layer(degree);
-// 	let coefficient_index = 1; // skip first (fully weighted), used in terminator sum (see below)
-// 	let sum = cn(points[points.size() - 1]) * powers[degree - 1];
-
-// 	for (const index of $range(degree - 1, 0, -1)) {
-// 		const point = points[index];
-// 		let sign = (index % 2 === 1) ? 1 : -1;
-// 		let scale = 0;
-// 		for (const power of $range(degree - 1, index - 1, -1)) {
-// 			const coefficient = (sign * coefficients[coefficient_index++]);
-// 			scale += (power === -1) ? 1 : powers[power] * coefficient
-// 			sign = -sign;
-// 		}
-
-// 		sum += cn(point) * scale;
-// 	}
-
-// 	return sum as unknown as T
-// }
-
-/**
- * @see https://oeis.org/A001399 ; Formula derived by Jon Perry on June 17th, 2003.
- *
- * This happens to be the required number of values in order to represent the `nth` layer
- * of Pascal's Tetrahedron when proper mirroring/reflections are used. I think.
- */
-// Additional Facts:
-//  - We only need to compute `floor(n / 3) + 1` lines of the tetrahedron to reach the center / obtain all values.
-function A001399(n: number) {
-	const d6 = n / 6;
-	const m6 = n % 6;
-	const t = math.floor(d6)
-	const tn = t * (t + 1) / 2;
-	return 6 * tn + m6 * (t + 1) + (m6 === 0 ? 1 : 0)
+function factorial(n: number) {
+	let sum = n;
+	while (n > 1) {
+		n -= 1
+		sum *= n;
+	}
+	return n
 }
 
+function combinations(set: number, pick: number) {
+	const sf = factorial(set);
+	const sp = factorial(pick);
+	return sf / (factorial(pick) * factorial(set - pick))
+}
 
 const pascal_halves: Array<Array<number>> = new Array(10)
 function get_pascal_row_mirrorable(row: number): Array<number> {
@@ -103,47 +75,56 @@ function get_flattened_pascal_tetrahedron_layer(layer: number): Array<number> {
 }
 
 
-// const powers_cache: Record</* value */ number, Record</* to */ number, Array<number>>> = {}
+const powers_cache: Record</* value */ number, Record</* to */ number, Array<number>>> = {}
 function generate_powers(value: number, to: number): Array<number> {
-	// const in_power_cache = powers_cache[value] ??= {};
-	// const memoized = in_power_cache[to];
-	// if (memoized !== undefined) return memoized;
+	const in_power_cache = powers_cache[value] ??= {};
+	const memoized = in_power_cache[to];
+	if (memoized !== undefined) return memoized;
 	const powers = new Array<number>(to);
 	powers[0] = value;
 	for (const i of $range(2, to)) {
 		powers[i - 1] = powers[i - 2] * value;
 	}
-	// in_power_cache[to] = powers;
+	in_power_cache[to] = powers;
 	return powers
 }
 
 
-const bezier_coefficients_cache: Record</* degree */ number, Record</* derivations */ number, Array<number>>> = {}
-function get_bezier_coefficients(degree: number, derivations: number): Array<number> {
-	const in_degree_cache = bezier_coefficients_cache[degree] ??= {};
+// todo: apply sign here instead of in bezier func
+const bernstein_coefficients_cache: Record</* degree */ number, Record</* derivations */ number, Array<number>>> = {}
+function get_bernstein_coefficients(degree: number, derivations: number = 0): Array<number> {
+	const in_degree_cache = bernstein_coefficients_cache[degree] ??= {};
 	const memoized = in_degree_cache[derivations];
 	if (memoized) return memoized;
 
-	let derivatives_applied = 0;
-	let coefficients = get_flattened_pascal_tetrahedron_layer(degree);
+	const coefficients = table.clone(get_flattened_pascal_tetrahedron_layer(degree));
+
+	let upsign = 1;
 	let coefficient_index = 0;
+	for (const span of $range(0, degree)) {
+		let sign = upsign
+		for (const _ of $range(0, span)) {
+			coefficients[coefficient_index] *= sign
+			coefficient_index += 1;
+			sign = -sign;
+		}
+		upsign = -upsign;
+	}
 
 	if (derivations !== 0) {
-		coefficients = table.clone(coefficients);
-
-		while (derivatives_applied !== derivations) {
+		let derivatives_applied = -1;
+		while (derivatives_applied !== derivations - 1) {
+			coefficient_index = 0;
 			for (const index of $range(degree, 0, -1)) {
-				const skip = math.max(derivatives_applied - index + 1, 0)
+				const skip = math.max(derivatives_applied - index, 0)
 				for (const power of $range(degree - 1, index - 1 + skip, -1)) {
-					if (power >= derivatives_applied) {
-						coefficients[coefficient_index] *= (power - derivatives_applied + 1);
+					if (power > derivatives_applied) {
+						coefficients[coefficient_index] *= (power - derivatives_applied);
 					}
 					coefficient_index += 1;
 				}
 			}
-
 			derivatives_applied += 1;
-			coefficient_index = 0;
 		}
 	}
 
@@ -152,54 +133,120 @@ function get_bezier_coefficients(degree: number, derivations: number): Array<num
 	return coefficients
 }
 
-/**
- * @param points the points to create a curve on: the first is the starting point, the last is the ending point, and those in-between are "control points"
- * @param progress the progress into the interpolation: at zero, it will return the starting position, and at one, it will return the ending position
- * @param derivative compute what derivative
- * @see https://en.wikipedia.org/wiki/B%C3%A9zier_curve
- */
-export function bezier<T extends number | Interpolatable>(
-	points: MaybeReadonly<[start: T, ...control: Array<T>, end: T]>,
+
+export function polynomic_bezier<T extends number | Interpolatable>(
+	points: BezierInput<T>,
 	progress: number,
 	derivative = 0,
 	degree = points.size() - 1,
 ): T {
 	const powers = generate_powers(progress, degree);
-	const coefficients = get_bezier_coefficients(degree, derivative);
+	const coefficients = get_bernstein_coefficients(degree, derivative);
 	for (const outside of $range(-degree - derivative, -1)) powers[outside] = 1;
-	const upsign = (degree % 2 === 0) ? 1 : -1;
 	let sum = (points[degree] as number) * (powers[degree - 1 - derivative]) * coefficients[0]
 	let coefficient_index = 1;
 
 	for (const index of $range(degree - 1, 0, -1)) {
-		let sign = (index % 2 === 0) ? upsign : -upsign;
-		let scale = 0;
-
+		let scale = 0
 		const skip = math.max(derivative - index, 0)
-		for (const power of $range(degree - 1, index - 1 + skip, -1)) {
-			const coefficient = (sign * coefficients[coefficient_index]);
+		for (const power of $range(degree, index + skip, -1)) {
+			const coefficient = coefficients[coefficient_index];
 			coefficient_index += 1
-			scale += (powers[power - derivative]) * coefficient
-			sign = -sign;
+			scale += (powers[power - derivative - 1]) * coefficient
 		}
 
 		sum += (points[index] as number) * scale;
 	}
 
-	return sum as unknown as T
+	return sum as unknown as T;
+}
+
+export function polynomic_bezier_horners<T extends number | Interpolatable>(
+	points: BezierInput<T>,
+	progress: number,
+	derivative = 0,
+	degree = points.size() - 1,
+): T {
+	const coefficients = get_bernstein_coefficients(degree, derivative);
+	let sum = (points[degree] as number) * math.pow(progress, degree - derivative) * coefficients[0]
+	let coefficient_index = 1;
+
+	print(progress, coefficients[0], coefficients[math.ceil((coefficients.size() - 1) / 2)], coefficients[coefficients.size() - 1])
+
+	for (const index of $range(degree - 1, 0, -1)) {
+		let scale = coefficients[coefficient_index]; coefficient_index += 1;
+		const skip = math.max(derivative - index, 0)
+		for (const _ of $range(index + skip, degree - 1)) {
+			const coefficient = coefficients[coefficient_index];
+			coefficient_index += 1
+			scale *= progress;
+			scale += coefficient;
+		}
+		coefficient_index += skip
+		scale *= math.pow(progress, math.max(index - derivative, 0))
+		sum += (points[index] as number) * scale;
+	}
+
+	return sum as unknown as T;
+}
+
+function derive_control_points<T>(points: BezierInput<T>, derivative: number,
+	degree = points.size() - 1,
+	subtract: (lhs: T, rhs: T) => T,
+	mutable = table.create(degree) as MutableBezierInput<T>,
+): BezierInput<T> {
+	while (derivative > 0) {
+		for (const i of $range(0, degree - 1)) {
+			mutable[i] = (degree * (subtract(
+				points[i + 1],
+				points[i    ],
+			) as number)) as T;
+		}
+		derivative -= 1;
+		degree -= 1;
+		points = mutable
+	}
+	return points;
+}
+
+export function de_casteljau_bezier<T>(
+	points: BezierInput<T>,
+	progress: number,
+	derivative = 0,
+	degree = points.size() - 1,
+	lerp: (from: T, dest: T, progress: number) => T,
+	subtract: (lhs: T, rhs: T) => T
+): T {
+	const mutable = table.create(degree) as MutableBezierInput<T>
+	points = derive_control_points(points, derivative, degree, subtract, mutable)
+	degree -= derivative;
+
+	while (degree > 0) {
+		for (const i of $range(1, degree)) {
+			mutable[i - 1] = lerp(
+				points[i - 1],
+				points[i    ],
+				progress
+			);
+		}
+		degree -= 1;
+		points = mutable
+	}
+
+	return points[0];
 }
 
 export function bezier_length<
 	T extends number | Interpolatable,
 	U extends number | Interpolatable = T
->(points: MaybeReadonly<[start: T, ...control: Array<T>, end: T]>, zero: U,
+>(points: BezierInput<T>, zero: U,
 	transform_point: (value: T) => U,
 	abs: (value: U) => U,
 	is_error_marginal: (value: U, depth: number) => boolean,
 	max_depth: number
 ) {
 	return adaptive_guass_legendre_quadrature(
-		(t) => transform_point(bezier(points, t, 1)),
+		(t) => transform_point(polynomic_bezier(points, t, 1)),
 		zero,
 		abs,
 		is_error_marginal,
@@ -207,8 +254,5 @@ export function bezier_length<
 		max_depth, 0
 	)
 }
-
-
-type MaybeReadonly<T> = T | Readonly<T>
 
 interface Interpolatable extends ScalarMultiplyOp, AddOp, SubtractOp {}

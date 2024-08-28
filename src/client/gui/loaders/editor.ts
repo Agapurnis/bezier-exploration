@@ -10,10 +10,11 @@ import { EditorPointsList } from "../components/EditorPointsList";
 import { ButtonLabelledTextInput } from "../components/ButtonLabelledTextInput";
 import { selected_curve } from "client/state/selected_curve";
 import { Janitor } from "@rbxts/janitor";
-import { bezier } from "shared/bezier";
-import { round } from "shared/util";
+import { make, round } from "shared/util";
+import { OutcomeDisplay } from "../components/OutcomeDisplay";
+import { ComputationMethod, VisualColorDataSource } from "shared/curve-configuration";
 
-const RunService = game.GetService("RunService");
+const LogService = game.GetService("LogService");
 
 export const editor = new Instance("Frame");
 editor.Name = "Editor"
@@ -22,13 +23,13 @@ editor.Size = UDim2.fromScale(0.5, 0.5)
 editor.Parent = screen;
 editor.Visible = false;
 
-const editor_add_new_curve_button = new Instance("TextButton");
-editor_add_new_curve_button.Name = "Add New Curve"
-editor_add_new_curve_button.Text = "Add New Curve"
-editor_add_new_curve_button.BackgroundColor3 = new Color3(0.8, 0.8, 0.8)
-editor_add_new_curve_button.Size = UDim2.fromScale(0.2, 0.15);
-editor_add_new_curve_button.Parent = editor;
-editor_add_new_curve_button.MouseButton1Click.Connect(() => {
+const new_curve_button = new Instance("TextButton");
+new_curve_button.Name = "Add New Curve"
+new_curve_button.Text = "Add New Curve"
+new_curve_button.BackgroundColor3 = new Color3(0.8, 0.8, 0.8)
+new_curve_button.Size = UDim2.fromScale(0.2, 0.15);
+new_curve_button.Parent = editor;
+new_curve_button.MouseButton1Click.Connect(() => {
 	const basis = game.Workspace.CurrentCamera!.CFrame.Rotation.add(get_character().GetPivot().Position)
 	curves.AddCurve(new BezierCurveDisplay([
 		basis.mul(new Vector3( -5, 3, -10)).Max(new Vector3(-9e9, 3, -9e9)),
@@ -37,82 +38,108 @@ editor_add_new_curve_button.MouseButton1Click.Connect(() => {
 	]))
 })
 
-
 new EditorCurvesList(editor)
 new EditorPointsList(editor)
 
-export const editor_curve_settings = new Instance("ScrollingFrame");
-editor_curve_settings.Name = "Curve Settings"
-editor_curve_settings.Position = UDim2.fromScale(0.8, 0)
-editor_curve_settings.Size = UDim2.fromScale(0.20, 1);
-editor_curve_settings.Parent = editor;
-new Instance("UIListLayout", editor_curve_settings).SortOrder = Enum.SortOrder.LayoutOrder;
+export const outcome_display = new OutcomeDisplay(editor);
+let reading_stack = false;
+function handle_message(message: string, category: Enum.MessageType) {
+	if (category === Enum.MessageType.MessageInfo) {
+		if (message === "Stack End") { reading_stack = false; return }
+		reading_stack ||= (message === "Stack Begin");
+		if (reading_stack) return;
+	}
+	if (category === Enum.MessageType.MessageError) {
+		const [, source_terminator] = message.find(":%d+: ");
+		if (source_terminator !== undefined) message = message.sub(source_terminator)
+	}
+	outcome_display.Put(OutcomeDisplay.GetColor(category), message, 3)
+}
+LogService.MessageOut.Connect((message, category) => handle_message(message, category));
+function display_error(text: string): void { handle_message(text, Enum.MessageType.MessageError) }
 
+const offset_five = new UDim(0, 5);
+export const curve_settings_frame = make("ScrollingFrame", {
+	Name: "Curve Settings",
+	Position: UDim2.fromScale(0.8, 0),
+	Size: UDim2.fromScale(0.20, 1),
+	Parent: editor,
+	BackgroundColor3: new Color3(0.49, 0.49, 0.49),
+	AutomaticCanvasSize: Enum.AutomaticSize.Y,
+	VerticalScrollBarInset: Enum.ScrollBarInset.ScrollBar,
+	Children: {
+		Padding: make("UIPadding", {
+			PaddingTop: offset_five,
+			PaddingBottom: offset_five,
+			PaddingLeft: offset_five,
+			PaddingRight: offset_five,
+		}),
+		Layout: make("UIListLayout", {
+			SortOrder: Enum.SortOrder.LayoutOrder,
+			Padding: new UDim(0, 5),
+			HorizontalAlignment: Enum.HorizontalAlignment.Center,
+		}),
+	}
+})
 
-const resolution_frame = new ButtonLabelledTextInput("Resolution", "Set Resolution", undefined, editor_curve_settings, (value) => {
+const resolution_frame = new ButtonLabelledTextInput("Resolution", "Set Resolution", undefined, curve_settings_frame, (value) => {
 	const num = tonumber(value)
-	if (num === undefined) return warn("can't convert resolution to number");
+	if (num === undefined) return display_error("The provided resolution is not a valid number")
 	const curve = selected_curve.Get()!;
-	curve.SetResolution(math.round(num));
+	curve.Modify((b) => b.WithResolution(num))
 	curve.Render();
 })
 
-const part_transparency = new ButtonLabelledTextInput("Transparency", "Part Transparency", undefined, editor_curve_settings, (value) => {
+const part_transparency = new ButtonLabelledTextInput("Transparency", "Part Transparency", undefined, curve_settings_frame, (value) => {
 	const num = tonumber(value);
-	if (num === undefined) return warn("can't convert transparency to number");
+	if (num === undefined) return display_error("The provided transparency value is not a valid number.")
 	const curve = selected_curve.Get()!;
 	curve.PathInstanceTemplate.Transparency = num;
 	curve.Repool();
 	curve.Render();
 })
 
-const trace = new ButtonLabelledTextInput("Trace", "Trace (seconds)", undefined, editor_curve_settings, (value) => {
-	const input_seconds = tonumber(value);
-	if (input_seconds === undefined) return warn("can't convert time to number");
-	const tracer = new Instance("Part");
-	tracer.Name = "Trace"
-	tracer.Parent = game.Workspace;
-	tracer.Material = Enum.Material.SmoothPlastic;
-	tracer.Anchored = true;
-	tracer.Size = Vector3.one.mul(1.5)
+
+const threads = new ButtonLabelledTextInput("Threads", "Threads", undefined, curve_settings_frame, (value) => {
+	const num = tonumber(value);
+	if (num === undefined) return display_error("The provided thread count is not a valid number.")
 	const curve = selected_curve.Get()!;
-	let positions = curve.GetPointPositions();
-	let elapsed = 0;
-	const janitor = new Janitor();
-	janitor.Add(tracer.Destroying.Connect(() => janitor.Destroy()))
-	janitor.Add(curve.OnDestroy.Connect(() => janitor.Destroy())) // might run into race condition in heartbeat?
-	janitor.Add(curve.OnUpdate.Connect(() => positions = curve.GetPointPositions()))
-	janitor.Add(RunService.Heartbeat.Connect((delta) => {
-		const progress = (elapsed / input_seconds)
-		if (progress > 1) return tracer.Destroy();
-		const position = bezier(positions, progress);
-		const velocity = bezier(positions, progress, 1)
-		tracer.CFrame = CFrame.lookAlong(position, velocity).mul(curve.OrientationBasis);
-		elapsed += delta;
-	}));
+	curve.Modify((b) => b.WithThreads(num))
+	curve.Render();
 })
 
 
+// TODO: make trace behavior in curve class
+new ButtonLabelledTextInput("Trace", "Trace (seconds)", "1", curve_settings_frame, (value) => {
+	const input_seconds = tonumber(value);
+	if (input_seconds === undefined) return display_error("That trace time is not a valid number.")
+	selected_curve.Get()!.Trace(input_seconds);
+})
 
 
-const size_toggle = new LabelledCheckbox("Fit w/ Size", undefined, false, editor_curve_settings, (checked) => {
+const size_toggle = new LabelledCheckbox("Fit w/ Size", undefined, false, curve_settings_frame, (checked) => {
 	const curve = selected_curve.Get()!;
-	curve!.UseSize = checked;
+	curve!.Modify((b) => b.WithSize(checked))
 	curve.Repool();
 	curve.Render();
+	refresh_curve_settings();
+	outcome_display.Clear();
 })
 
 
-const style_option = new CyclableOptionsInput("Style", undefined, [
-	BezierCurveDisplay.VisualColorDataSource.Velocity,
-	BezierCurveDisplay.VisualColorDataSource.Direction,
-	BezierCurveDisplay.VisualColorDataSource.Curvature,
-	BezierCurveDisplay.VisualColorDataSource.Random,
-	BezierCurveDisplay.VisualColorDataSource.None,
-], undefined, undefined, editor_curve_settings, (style) => {
+const color_source_option = new CyclableOptionsInput("Color", undefined, [
+	VisualColorDataSource.Velocity,
+	VisualColorDataSource.Direction,
+	VisualColorDataSource.Curvature,
+	// VisualColorDataSource.Acceleration,
+	VisualColorDataSource.Random,
+	VisualColorDataSource.None,
+], undefined, undefined, curve_settings_frame, (source) => {
 	const curve = selected_curve.Get()!;
-	curve.SetStyle(style)
+	curve.Modify((b) => b.WithColorSource(source))
 	curve.Render();
+	refresh_curve_settings();
+	outcome_display.Clear();
 })
 
 const shape_option = new CyclableOptionsInput("Shape", undefined, [
@@ -120,17 +147,38 @@ const shape_option = new CyclableOptionsInput("Shape", undefined, [
 	Enum.PartType.Cylinder,
 	Enum.PartType.Ball,
 	Enum.PartType.Wedge
-], (variant) => variant.Name, undefined, editor_curve_settings, (shape) => {
+], (variant) => variant.Name, undefined, curve_settings_frame, (shape) => {
 	selected_curve.Get()!.ApplyPhysicalModification((part) => {
 		part.Shape = shape;
 	})
 })
 
+const method_option = new CyclableOptionsInput("Method", undefined, [
+	ComputationMethod.Polynomic,
+	ComputationMethod.PolynomicHorners,
+	ComputationMethod.DeCasteljau,
+], undefined, undefined, curve_settings_frame, (method) => {
+	const curve = selected_curve.Get()!;
+	curve.Modify((b) => b.WithMethod(method))
+	curve.Render()
+	refresh_curve_settings();
+	outcome_display.Clear();
+})
+
+
+
+const csf_acs = curve_settings_frame.Layout.AbsoluteContentSize;
+const csf_p = curve_settings_frame.Padding;
+curve_settings_frame.CanvasSize = new UDim2(
+	0, csf_acs.X + csf_p.PaddingLeft  .Offset + csf_p.PaddingRight.Offset,
+	0, csf_acs.Y + csf_p.PaddingBottom.Offset + csf_p.PaddingTop  .Offset
+);
+
 
 export const editor_general_settings = new Instance("ScrollingFrame");
 editor_general_settings.Name = "General Settings"
-editor_general_settings.Position = editor_curve_settings.Position
-editor_general_settings.Size = editor_curve_settings.Size
+editor_general_settings.Position = curve_settings_frame.Position
+editor_general_settings.Size = curve_settings_frame.Size
 editor_general_settings.Visible = false;
 editor_general_settings.Parent = editor;
 new Instance("UIListLayout", editor_general_settings).SortOrder = Enum.SortOrder.LayoutOrder;
@@ -142,19 +190,22 @@ const sound_toggle = new LabelledCheckbox("Sound Effects", "SFX Toggle", true, e
 
 
 function update_editor_curve_settings(curve: BezierCurveDisplay | undefined) {
-	editor_curve_settings.Visible = (curve !== undefined);
+	curve_settings_frame.Visible = (curve !== undefined);
 	editor_general_settings.Visible = (curve === undefined);
 	if (curve) {
 		resolution_frame.SetContent(tostring(curve.GetResolution()))
 		part_transparency.SetContent(tostring(round(curve.PathInstanceTemplate.Transparency, 3)));
-		size_toggle.Set(curve.UseSize)
-		style_option.SetCurrent(curve.GetStyle())
+		size_toggle.Set(curve.GetSize())
+		color_source_option.SetCurrent(curve.GetColorSource())
 		shape_option.SetCurrent(curve.PathInstanceTemplate.Shape as Exclude<Enum.PartType, Enum.PartType.CornerWedge>)
-		trace.SetContent("1")
+		method_option.SetCurrent(curve.GetMethod())
+		threads.SetContent(tostring(curve.GetThreads()))
 	}
 }
+function refresh_curve_settings() {
+	update_editor_curve_settings(selected_curve.Get())
+}
 selected_curve.Signal.Connect((curve) => update_editor_curve_settings(curve))
-update_editor_curve_settings(selected_curve.Get())
-
+refresh_curve_settings()
 
 

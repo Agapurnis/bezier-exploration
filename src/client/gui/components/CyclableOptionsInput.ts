@@ -6,6 +6,12 @@ export class CyclableOptionsInput<T extends defined>{
 		Name: "CyclableOptionsInput",
 		Size: UDim2.fromOffset(100, 30),
 		RichText: true,
+		TextScaled: true,
+		Children: {
+			TextSizeConstraint: make("UITextSizeConstraint", {
+				MaxTextSize: 8
+			})
+		}
 	});
 
 	public static GetToggleStatusEmoji(checked: boolean): string {
@@ -31,6 +37,7 @@ export class CyclableOptionsInput<T extends defined>{
 		const index = this.IndexOf(value);
 		if (index === undefined) return false;
 		this.Index = index;
+		this.UpdateText()
 		return true;
 	}
 
@@ -67,6 +74,7 @@ export class CyclableOptionsInput<T extends defined>{
 		this.Index = Options.indexOf(initial)
 		this.Instance = CyclableOptionsInput.InstanceTemplate.Clone();
 		this.Instance.MouseButton1Click.Connect(() => this.Adjust())
+		this.Instance.MouseButton2Click.Connect(() => this.Adjust(-1))
 		this.Changed.Connect(() => this.UpdateText())
 		this.UpdateText();
 		this.Instance.Name = name ?? Label;

@@ -10,11 +10,12 @@ export class EditorPointsListItem {
 		Name: "EditorPointsListItem",
 		Size: new UDim2(1, 0, 0, 30),
 		Children: {
-			TextLabel: make("TextLabel", {
-				Position: UDim2.fromOffset(30, 0),
-				Size: new UDim2(0.5, -30, 1, 0),
+			Layout: make("UIListLayout", {
+				SortOrder: Enum.SortOrder.LayoutOrder,
+				FillDirection: Enum.FillDirection.Horizontal,
 			}),
 			ReorderButtons: make("Frame", {
+				LayoutOrder: 0,
 				Size: new UDim2(0, 30, 1, 0),
 				Children: {
 					Up: make("TextButton", {
@@ -28,18 +29,43 @@ export class EditorPointsListItem {
 					})
 				}
 			}),
+			Coordinates: make("TextLabel", {
+				LayoutOrder: 1,
+				Position: UDim2.fromOffset(30, 0),
+				Size: new UDim2(0, 0, 1, 0),
+				AutomaticSize: Enum.AutomaticSize.X,
+				FontFace: Font.fromName(Enum.Font.RobotoMono.Name, Enum.FontWeight.Bold),
+				TextScaled: true,
+				TextXAlignment: Enum.TextXAlignment.Left,
+				Children: {
+					Pad: make("UIPadding", {
+						PaddingLeft: new UDim(0, 5)
+					}),
+					Grow: make("UIFlexItem", {
+						FlexMode: Enum.UIFlexMode.Fill
+					}),
+					Constrain: make("UITextSizeConstraint", {
+						MaxTextSize: 14
+					})
+				}
+			}),
 			RightButtons: make("Frame", {
-				Size: new UDim2(0.5, -30, 1, 0),
+				LayoutOrder: 2,
+				Size: new UDim2(0, 0, 1, 1),
+				AutomaticSize: Enum.AutomaticSize.X,
 				Position: UDim2.fromScale(0.5, 0),
 				Children: {
-					Delete: make("TextButton", {
-						Text: "Remove",
-						Size: UDim2.fromScale(0.5, 1)
+					Delete: make("ImageButton", {
+						Image: "http://www.roblox.com/asset/?id=11768918600",
+						Size: new UDim2(0, 10e10, 1, 0),
+						Children: {
+							AspectRatio: new Instance("UIAspectRatioConstraint")
+						}
 					}),
 					Copy: make("TextButton", {
 						Text: "Clone",
-						Position: UDim2.fromScale(0.5, 0),
-						Size: UDim2.fromScale(0.5, 1),
+						Position: new UDim2(0, 62, 0, 0),
+						Size: new UDim2(0, -30, 1, 0)
 					}),
 				}
 			})
@@ -55,10 +81,10 @@ export class EditorPointsListItem {
 		private readonly PointIndex: number,
 	) {
 		this.Instance = EditorPointsListItem.InstanceTemplate.Clone();
-		this.Instance.TextLabel.Text = format_vector3(Point.Instance.Position);
+		this.Instance.Coordinates.Text = format_vector3(Point.Instance.Position);
 
 		const janitor = new Janitor();
-		janitor.Add(Point.OnMovement.Connect((cframe) => this.Instance.TextLabel.Text = format_vector3(cframe.Position)));
+		janitor.Add(Point.OnMovement.Connect((cframe) => this.Instance.Coordinates.Text = format_vector3(cframe.Position)));
 		janitor.Add(selected_point.Signal.Connect(() => this.StyleBasedOnIsActive()))
 		this.Instance.Destroying.Once(() => janitor.Destroy())
 		this.StyleBasedOnIsActive()
@@ -67,7 +93,7 @@ export class EditorPointsListItem {
 		this.Instance.ReorderButtons.Down.MouseButton1Click.Connect(() => this.AdjustOrderPlacement(1))
 
 		this.Instance.RightButtons.Copy.MouseButton1Click.Connect(() => Curve.AddPoint(get_character().GetPivot().Position, this.PointIndex))
-		this.Instance.RightButtons.Delete.MouseButton1Click.Once(() => {
+		this.Instance.RightButtons.Delete.MouseButton1Click.Connect(() => {
 			const { ok, err } = Curve.RemovePoint(this.PointIndex)
 			if (!ok) warn(err)
 		});
@@ -85,7 +111,7 @@ export class EditorPointsListItem {
 	}
 
 	private StyleBasedOnIsActive(is_active = this.IsActive()) {
-		this.Instance.TextLabel.BackgroundColor3 = (is_active)
+		this.Instance.Coordinates.BackgroundColor3 = (is_active)
 			? new Color3(0.79, 0.76, 0.76)
 			: new Color3(0.68, 0.68, 0.68)
 	}

@@ -1,20 +1,18 @@
 //!native
 import { Signal } from "@rbxts/beacon";
-import { bezier, bezier_length } from "shared/bezier";
-import { evaluate_color_sequence, round, SignalView } from "shared/util";
+import { bezier_length, BezierInput, de_casteljau_bezier, polynomic_bezier, polynomic_bezier_horners } from "shared/bezier";
+import { evaluate_color_sequence, in_inclusive_range, is_integer, make, round, SignalView, timed } from "shared/util";
 import { Point } from "./point";
-import { BoundCompute } from "./curve-worker.client";
+import { BoundCompute, NullRepr } from "./curve-worker.client";
 import { selected_point } from "./state/selected_point";
 import { use_sound_effects } from "./state/sfx";
+import { BezierConfiguration, BezierConfigurationBuilder, ComputationMethod, is_measured_source, VisualColorDataSource } from "../shared/curve-configuration";
+import { ComputeCFrame, ComputeCurvature, CurveComputationStep, ComputeSize, DoCurveComputationStep, DoPathStepAndReturnMaxMeasured, GetBezierFunction, RunDeferredPathModifications, PathAccumulatedStepTimings, MergeTimings, RenderMillisecondTimings, DefaultAccumulablePathStepTimings } from "../shared/curve-rendering";
+import { Janitor } from "@rbxts/janitor";
+import WorkerOrchestrator from "./curve-worker-orchestrator"
+import { inspect } from "shared/internal/inspect";
 
-const actors = script.Parent!
-	.WaitForChild("curve-worker")!
-	.WaitForChild("Actors")!
-	.GetChildren() as Actor[];
-
-const worker_job_done_signal = new Instance("BindableEvent");
-worker_job_done_signal.Parent = game.Workspace;
-worker_job_done_signal.Name = "Worker Job Finish Signal"
+const RunService = game.GetService("RunService")
 
 export class BezierCurveDisplay {
 	private static readonly PathPartDefaultTemplate = new Instance("Part");
@@ -31,28 +29,33 @@ export class BezierCurveDisplay {
 		this.PathPartDefaultTemplate.Locked = true;
 	}
 
-	private static readonly InstanceTemplate = new Instance("Model") as BezierCurveDisplay.Instance
-	static {
-		this.InstanceTemplate.Name = "Unnamed Bezier Curve";
-		const PointsFolder = new Instance("Folder");
-		PointsFolder.Name = "Points";
-		PointsFolder.Parent = this.InstanceTemplate;
-		const PathFolder = new Instance("Folder");
-		PathFolder.Name = "Path";
-		PathFolder.Parent = this.InstanceTemplate;
-		const Humanoid = new Instance("Humanoid");
-		Humanoid.Parent = this.InstanceTemplate; // hack for highlight on transparent things
-		const Highlight = new Instance("Highlight");
-		Highlight.OutlineColor = new Color3(1, 1, 1);
-		Highlight.FillTransparency = 1;
-		Highlight.Enabled = false;
-		Highlight.Parent = this.InstanceTemplate;
-	}
+	private static readonly InstanceTemplate = make("Model", {
+		Name: "Unnamed Bezier Curve",
+		Children: {
+			Points: new Instance("Folder"),
+			Path: new Instance("Folder"),
+			Tracers: new Instance("Folder"),
+			// Humanoid: new Instance("Humanoid"), // hack for highlight on transparent things
+			Highlight: make("Highlight", {
+				OutlineColor: new Color3(1, 1, 1),
+				FillTransparency: 1,
+				Enabled: false,
+			})
+		}
+	})
 
 	private static readonly TickAudio = new Instance("Sound");
 	static {
 		this.TickAudio.Name = "Tick";
 		this.TickAudio.SoundId = "rbxassetid://9114065998"
+	}
+
+	private static readonly TracerTemplate = new Instance("Part")
+	static {
+		this.TracerTemplate.Name = "Tracer"
+		this.TracerTemplate.Material = Enum.Material.SmoothPlastic;
+		this.TracerTemplate.Anchored = true;
+		this.TracerTemplate.Size = Vector3.one.mul(1.5)
 	}
 
 	private static readonly InstanceMapping = new WeakMap<BezierCurveDisplay.Instance, BezierCurveDisplay>();
@@ -72,57 +75,61 @@ export class BezierCurveDisplay {
 	private readonly OnPointsChangeController = new Signal<[ReadonlyArray<Point>]>();
 	private readonly OnDestroyBindable: BindableEvent<() => void> = new Instance("BindableEvent");
 	private readonly OnUpdateBindable: BindableEvent<() => void> = new Instance("BindableEvent");
-	private readonly OnRenderBindable: BindableEvent<(timings: BezierCurveDisplay.RenderTimings) => void> = new Instance("BindableEvent");
+	private readonly OnRenderBindable: BindableEvent<(timings: RenderMillisecondTimings) => void> = new Instance("BindableEvent");
 	public readonly OnPointsChange = this.OnPointsChangeController as SignalView<[ReadonlyArray<Point>]>
 	public readonly OnDestroy = this.OnDestroyBindable.Event
 	public readonly OnUpdate = this.OnUpdateBindable.Event;
 	public readonly OnRender = this.OnRenderBindable.Event;
 
+	private Threads!: number;
+	private Method!: ComputationMethod
+	private ColorSource!: VisualColorDataSource
+	private Size!: boolean
+	private DoComputeVelocity!: boolean
+	private DoComputeCurvature!: boolean
+	private DoComputeAcceleration!: boolean
+
+	public GetThreads() { return this.Threads }
+	public GetMethod() { return this.Method }
+	public GetSize() { return this.Size }
+	public GetColorSource() { return this.ColorSource }
+
 	constructor(
 		points: Vector3[],
-		options: Partial<BezierCurveDisplay.InitializationOptions> = {}
+		private ConfigurationBuilder = new BezierConfigurationBuilder()
 	) {
 		this.Instance = BezierCurveDisplay.InstanceTemplate.Clone();
 		this.Instance.Parent = game.Workspace;
 		BezierCurveDisplay.InstanceMapping.set(this.Instance, this);
-		this.SetResolution(options.Resolution ?? 250);
+		this.ApplyConfiguration(this.ConfigurationBuilder.Resolve())
 		for (const point of points) {
 			this.AddPoint(point)
 		}
 
-		this.UseSize = options.SizeParts ?? (this.Resolution <= 1000);
-		this.Style = options.VisualizeWithColor ?? BezierCurveDisplay.VisualColorDataSource.Velocity;
-
 		this.OnUpdate.Connect(() => {
-			this.Render();
+			// RunService.Stepped.Once(() => this.Render())
+			this.Render()
 			this.PlayTickSFX();
 		})
 		this.Render()
 	}
 
-	private Resolution: number = 0;
-	public GetResolution() { return this.Resolution }
-	public SetResolution(resolution: number) {
-		if (resolution <= 0) error("Bad resolution!") // TODO: handle better
-		const old = this.Resolution;
-		this.Resolution = resolution;
-		const diff = resolution - old;
-		if (diff < 0) {
-			for (const removed of $range(old - 1, resolution, -1)) {
-				this.PathInstances[removed].Destroy();
-				this.PathInstances.unorderedRemove(removed)
-			}
-		} else {
-			for (const created of $range(old, resolution - 1)) {
-				const instance = this.PathInstanceTemplate.Clone();
-				this.PathInstances[created] = instance;
-				instance.Parent = this.Instance.Path;
-			}
-		}
-		for (const thread of $range(0, 256 - 1)) {
-			actors[thread].SendMessage("UpdateInstances", this.Instance.Path)
-		}
+	public ApplyConfiguration(configuration: BezierConfiguration) {
+		this.SetThreads(configuration.threads)
+		this.SetMethod(configuration.method)
+		this.SetColorSource(configuration.color_source)
+		this.Size = configuration.size;
+		this.DoComputeVelocity = configuration.velocity;
+		this.DoComputeCurvature = configuration.curvature;
+		this.DoComputeAcceleration = configuration.acceleration;
+		this.SetResolution(configuration.resolution);
 	}
+
+	public Modify(modify: (builder: BezierConfigurationBuilder) => BezierConfigurationBuilder) {
+		this.ApplyConfiguration(modify(this.ConfigurationBuilder).Validate().Resolve())
+	}
+
+	public Bezier!: (points: BezierInput<Vector3>, progress: number, derivations?: number) => Vector3
 
 	public AddPoint(position: Vector3, at = this.Points.size()): Point {
 		if (at < 0) at = this.Points.size() + 1 + at;
@@ -191,18 +198,49 @@ export class BezierCurveDisplay {
 		this.OnPointsChangeController.Fire(this.Points);
 	}
 
-	public UseSize = false;
-
-	private Style = BezierCurveDisplay.VisualColorDataSource.Direction;
-	public GetStyle() { return this.Style }
-	public SetStyle(style: BezierCurveDisplay.VisualColorDataSource) {
-		this.Style = style;
-		if (style === BezierCurveDisplay.VisualColorDataSource.None) {
-			const gray = new Color3(0.5, 0.5, 0.5);
-			this.ApplyPhysicalModification((part) => {
-				part.Color = gray;
-			})
+	private Resolution: number = 0;
+	public GetResolution() { return this.Resolution }
+	private SetResolution(resolution: number) {
+		const old = this.Resolution;
+		this.Resolution = resolution;
+		const diff = resolution - old;
+		if (diff < 0) {
+			for (const removed of $range(old - 1, resolution, -1)) {
+				this.PathInstances[removed].Destroy();
+				this.PathInstances.unorderedRemove(removed)
+			}
+		} else {
+			for (const created of $range(old, resolution - 1)) {
+				const instance = this.PathInstanceTemplate.Clone();
+				this.PathInstances[created] = instance;
+				instance.CFrame = new CFrame(new Vector3(9e9, 9e9, 9e9));
+				instance.Parent = this.Instance.Path;
+			}
 		}
+		if (is_measured_source(this.ColorSource)) {
+			this.MeasuredScalarsBuffer = new Array<number>(resolution)
+		}
+		this.DestinationsBuffer = new Array<CFrame>(resolution);
+	}
+
+	private SetColorSource(color_source: VisualColorDataSource) {
+		if (color_source === VisualColorDataSource.None) {
+			const gray = new Color3(0.5, 0.5, 0.5)
+			this.ApplyPhysicalModification((part) => part.Color = gray)
+		}
+		this.ColorSource = color_source;
+	}
+
+	private SetMethod (method: ComputationMethod) {
+		this.Method = method;
+		this.Bezier = GetBezierFunction(method)
+	}
+
+	private SetThreads (count: number) {
+		if (count <= 0) error("Invalid thread count!");
+		count = (count === 1) ? 0 : count // 1 thread = no spawned actors
+		WorkerOrchestrator.AdjustQuantity(count).await();
+		this.Threads = count;
 	}
 
 	public GetLength(): number {
@@ -220,7 +258,7 @@ export class BezierCurveDisplay {
 		return this.Points.map((point) => point.Instance.Position) as [Vector3, ...Vector3[], Vector3]
 	}
 
-	public OrientationBasis = CFrame.fromMatrix(
+	public static readonly OrientationBasis = CFrame.fromMatrix(
 		Vector3.zero,
 		new Vector3( 0,  0,  1),
 		new Vector3(-1,  0,  0),
@@ -238,6 +276,167 @@ export class BezierCurveDisplay {
 		for (const part of this.PathInstances) {
 			apply_modification(part)
 		}
+	}
+
+	private DestinationsBuffer!: CFrame[]
+	private MeasuredScalarsBuffer: number[] | undefined
+
+	/**
+	 * @returns the number of milliseconds it took, or nil if there weren't enough points to preform a render
+	 */
+	public RenderParallel(): Promise<RenderMillisecondTimings | undefined> {
+		if (!(this.Points.size() >= 3)) return Promise.resolve(undefined);
+		let jobs_completed = 0;
+
+		const actors = WorkerOrchestrator.GetActors()
+		const positions = table.freeze(this.GetPointPositions());
+		const outputs = new Array<defined[]>(this.Threads)
+		const start_time = os.clock();
+		const computed = table.create(5) as CurveComputationStep
+
+		return new Promise((resolve) => {
+			const connection = WorkerOrchestrator.OnJobComplete.Event.Connect((chunk) => {
+				outputs[jobs_completed] = chunk;
+				jobs_completed += 1;
+				if (jobs_completed === this.Threads) {
+					const accumulated_step_timings = DefaultAccumulablePathStepTimings();
+					const computation_took = os.clock() - start_time;
+					let max_measured: number | undefined = 0;
+					let index = 0;
+					for (const division of outputs) {
+						const allotment = division.size() / 5;
+						let cursor = 0;
+						for (const _ of $range(0, allotment - 1)) {
+							division.move(cursor, cursor + 4, 0, computed)
+							max_measured = DoPathStepAndReturnMaxMeasured(
+								this.PathInstances[index],
+								index,
+								this.ColorSource,
+								this.DestinationsBuffer,
+								max_measured,
+								this.MeasuredScalarsBuffer,
+								accumulated_step_timings,
+								computed,
+							)
+
+							cursor += 5;
+							index += 1;
+						}
+					}
+
+					const deferred_timings = RunDeferredPathModifications(
+						this.PathInstances,
+						this.Resolution,
+						this.DestinationsBuffer,
+						this.ColorSource,
+						this.MeasuredScalarsBuffer,
+						max_measured
+					)
+
+					const timings = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
+					connection.Disconnect();
+					this.OnRenderBindable.Fire(timings);
+					BezierCurveDisplay.TotalRenderCount += 1;
+					this.RenderCount += 1;
+					resolve(timings)
+				}
+			})
+
+			const inc = math.floor(this.Resolution / this.Threads)
+			const rem = this.Resolution % this.Threads;
+
+			let lo = 1;
+			let hi = inc;
+			for (const thread of $range(0, this.Threads - 1)) {
+				if (thread < rem) {
+					hi += 1;
+				}
+
+				(actors[thread].SendMessage as (this: Actor, topic: string, ...parameters: Parameters<BoundCompute>) => void)("Compute",
+					lo,
+					hi,
+					this.Resolution,
+					this.Method,
+					this.DoComputeVelocity,
+					this.DoComputeAcceleration,
+					this.DoComputeCurvature,
+					this.Size,
+					positions,
+				)
+
+				lo = hi + 1
+				hi = lo + inc - 1;
+			}
+		})
+	}
+
+
+	public RenderBlocking(): RenderMillisecondTimings | undefined {
+		if (!(this.Points.size() >= 3)) return undefined;
+		const bezier = this.Bezier;
+		const positions = this.GetPointPositions();
+		const start_time = os.clock()
+		const computed = table.create(5) as CurveComputationStep
+		const accumulated_step_timings = DefaultAccumulablePathStepTimings();
+		let computation_took = 0;
+
+		let max_measured: number | undefined = 0;
+		for (const step of $range(0, this.Resolution - 1)) {
+			computation_took += timed(() => DoCurveComputationStep(
+				bezier,
+				this.Resolution,
+				positions,
+				step / (this.Resolution - 1),
+				computed,
+				this.DoComputeVelocity,
+				this.DoComputeAcceleration,
+				this.DoComputeCurvature,
+				this.Size
+			))[1];
+
+
+			max_measured = DoPathStepAndReturnMaxMeasured(
+				this.PathInstances[step],
+				step,
+				this.ColorSource,
+				this.DestinationsBuffer,
+				max_measured,
+				this.MeasuredScalarsBuffer,
+				accumulated_step_timings,
+				computed,
+			)
+		}
+
+		const deferred_timings = RunDeferredPathModifications(
+			this.PathInstances,
+			this.Resolution,
+			this.DestinationsBuffer,
+			this.ColorSource,
+			this.MeasuredScalarsBuffer,
+			max_measured
+		)
+
+		const timing = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
+		this.OnRenderBindable.Fire(timing);
+		BezierCurveDisplay.TotalRenderCount += 1;
+		this.RenderCount += 1;
+		return timing
+	}
+
+	public async Render(): Promise<RenderMillisecondTimings | undefined>  {
+		if (this.Threads > 1) {
+			return this.RenderParallel()
+		} else {
+			return this.RenderBlocking()
+		}
+	}
+
+	public Repool() {
+		const resolution = this.Resolution;
+		for (const path of this.PathInstances) path.Destroy();
+		table.clear(this.PathInstances);
+		this.Resolution = 0;
+		this.SetResolution(resolution)
 	}
 
 	private LastSFXPlayed = 0;
@@ -262,226 +461,28 @@ export class BezierCurveDisplay {
 		}
 	}
 
-	/**
-	 * @returns the number of milliseconds it took, or nil if there weren't enough points to preform a render
-	 */
-	public RenderParallel(): Promise<BezierCurveDisplay.DetailedRenderTimings | undefined> {
-		if (!(this.Points.size() >= 3)) return Promise.resolve(undefined);
-		const threads = math.clamp(math.floor(this.Resolution / 100), 1, 256)
-		let jobs_completed = 0;
+	public Trace(seconds: number): Part {
+		const tracer = BezierCurveDisplay.TracerTemplate.Clone();
+		tracer.Parent = this.Instance.Tracers;
+		let positions = this.GetPointPositions();
+		let elapsed = 0;
 
-		const positions = table.freeze(this.GetPointPositions());
-		const outputs = new Array<unknown[]>(threads)
-		const start_time = os.clock();
+		const janitor = new Janitor();
+		janitor.Add(tracer.Destroying.Connect(() => janitor.Destroy()))
+		janitor.Add(this.OnUpdate.Connect(() => positions = this.GetPointPositions()))
+		janitor.Add(RunService.Heartbeat.Connect((delta) => {
+			const progress = (elapsed / seconds)
+			if (progress > 1) return tracer.Destroy();
+			const position = this.Bezier(positions, progress);
+			const velocity = this.Bezier(positions, progress, 1)
+			tracer.CFrame = CFrame.lookAlong(position, velocity).mul(BezierCurveDisplay.OrientationBasis);
+			elapsed += delta;
+		}));
 
-		return new Promise((resolve) => {
-			const connection = worker_job_done_signal.Event.Connect((chunk) => {
-				outputs[jobs_completed] = chunk;
-				jobs_completed += 1;
-				if (jobs_completed === threads) {
-					const computation_took = (os.clock() - start_time) * 1000;
-					const destinations = new Array<CFrame>(this.Resolution);
-					const velocities = (this.Style === BezierCurveDisplay.VisualColorDataSource.Velocity) ? new Array<number>(this.Resolution) : undefined;
-					let max_velocity = 0;
-					let i = 0;
-
-					for (const division of outputs) {
-						const allotment = division.size() / 5
-						for (const piece of $range(0, allotment - 1)) {
-							const part = this.PathInstances[i];
-							if (!part) {
-								warn("uh oh");
-								break
-							}
-							const offset = (piece * 5);
-							const position = division[offset + 0] as Vector3;
-							const velocity = division[offset + 1] as Vector3;
-							destinations[i] = CFrame.lookAlong(position, velocity).mul(this.OrientationBasis) as never;
-							const curvature = division[offset + 3] as number;
-							const size = division[offset + 4] as Vector3;
-							if (this.UseSize) part.Size = size;
-							switch (this.Style) {
-								case BezierCurveDisplay.VisualColorDataSource.None: break;
-								case BezierCurveDisplay.VisualColorDataSource.Curvature: {
-									part.Color = evaluate_color_sequence(gradient, curvature);
-									break
-								}
-								case BezierCurveDisplay.VisualColorDataSource.Direction: {
-									const nv = velocity.Abs().Unit;
-									part.Color = new Color3(nv.X, nv.Y, nv.Z)
-									break
-								}
-								case BezierCurveDisplay.VisualColorDataSource.Velocity: {
-									velocities![i] = velocity.Magnitude;
-									max_velocity = velocity.Magnitude > max_velocity ? velocity.Magnitude : max_velocity;
-									break
-								}
-								case BezierCurveDisplay.VisualColorDataSource.Random: {
-									part.Color = new Color3(
-										math.random(),
-										math.random(),
-										math.random()
-									)
-									break
-								}
-							}
-
-							i += 1;
-						}
-					}
-
-					if (this.Style === BezierCurveDisplay.VisualColorDataSource.Velocity) {
-						for (const i of $range(0, this.Resolution - 1)) {
-							this.PathInstances[i].Color = evaluate_color_sequence(gradient, velocities![i] / max_velocity)
-						}
-					}
-
-					game.Workspace.BulkMoveTo(this.PathInstances, destinations, Enum.BulkMoveMode.FireCFrameChanged)
-					const took = (os.clock() - start_time) * 1000;
-					const timings: BezierCurveDisplay.DetailedRenderTimings = {
-						Detail: "Complex",
-						Computation: computation_took,
-						Total: took
-					}
-					connection.Disconnect();
-					this.OnRenderBindable.Fire(timings);
-					BezierCurveDisplay.TotalRenderCount += 1;
-					this.RenderCount += 1;
-					resolve(timings)
-				}
-			})
-
-			const inc = math.max(math.ceil((this.Resolution) / threads), 1)
-			let lo = 1;
-			let hi = inc;
-			for (const thread of $range(0, threads - 1)) {
-				(actors[thread].SendMessage as (this: Actor, topic: string, ...parameters: Parameters<BoundCompute>) => void)("Compute",
-					lo,
-					math.min(hi, this.Resolution),
-					this.Resolution,
-					true,
-					true,//this.Style === BezierCurveDisplay.VisualColorDataSource.Curvature,
-					this.UseSize,
-					positions,
-				)
-				lo += inc;
-				hi += inc;
-			}
-		})
-	}
-
-	public RenderBlocking(): BezierCurveDisplay.SimpleRenderTimings | undefined {
-		if (!(this.Points.size() >= 3)) return undefined;
-		const positions = this.GetPointPositions();
-		const destinations = new Array(this.Resolution)
-		const velocities = (this.Style === BezierCurveDisplay.VisualColorDataSource.Velocity) ? new Array<number>(this.Resolution) : undefined;
-		const start_time = os.clock()
-		let max_velocity = 0;
-		for (const step of $range(0, this.Resolution - 1)) {
-			const part = this.PathInstances[step];
-			const fraction = step / (this.Resolution - 1)
-			const position = bezier(positions, fraction);
-			const velocity = bezier(positions, fraction, 1)
-			destinations[step] = CFrame.lookAlong(position, velocity).mul(this.OrientationBasis)
-			const speed = velocity.Magnitude ** 3;
-			const acceleration = bezier(positions, fraction, 2)
-			const curvature = (speed !== 0) ? math.clamp(velocity.Cross(acceleration).Magnitude / speed, 0, 1) : 0
-			if (this.UseSize) part.Size = new Vector3((velocity.Magnitude / ((this.Resolution - 2) + (1 - curvature * 1.5))) + math.min(curvature / 3, 0.1), 1, 1)
-			switch (this.Style) {
-				case BezierCurveDisplay.VisualColorDataSource.None: break;
-				case BezierCurveDisplay.VisualColorDataSource.Curvature: {
-					part.Color = evaluate_color_sequence(gradient, curvature)
-					break
-				}
-				case BezierCurveDisplay.VisualColorDataSource.Direction: {
-					const nv = velocity.Abs().Unit;
-					part.Color = new Color3(nv.X, nv.Y, nv.Z)
-					break
-				}
-				case BezierCurveDisplay.VisualColorDataSource.Velocity: {
-					velocities![step] = velocity.Magnitude;
-					max_velocity = velocity.Magnitude > max_velocity ? velocity.Magnitude : max_velocity;
-					break
-				}
-				case BezierCurveDisplay.VisualColorDataSource.Random: {
-					part.Color = new Color3(math.random(), math.random(), math.random())
-					break
-				}
-			}
-		}
-		if (this.Style === BezierCurveDisplay.VisualColorDataSource.Velocity) {
-			for (const i of $range(0, this.Resolution - 1)) {
-				this.PathInstances[i].Color = evaluate_color_sequence(gradient, velocities![i] / max_velocity)
-			}
-		}
-		game.Workspace.BulkMoveTo(this.PathInstances, destinations, Enum.BulkMoveMode.FireCFrameChanged)
-		const took = (os.clock() - start_time) * 1000;
-		const timing: BezierCurveDisplay.SimpleRenderTimings = {
-			Detail: "Light",
-			Total: took
-		}
-		this.OnRenderBindable.Fire(timing);
-		BezierCurveDisplay.TotalRenderCount += 1;
-		this.RenderCount += 1;
-		return timing
-	}
-
-	public async Render(parallel_render_resolution_heuristic = 750): Promise<BezierCurveDisplay.RenderTimings | undefined>  {
-		if (this.Resolution >= parallel_render_resolution_heuristic) {
-			return this.RenderParallel()
-		} else {
-			return this.RenderBlocking()
-		}
-	}
-
-	public Repool() {
-		const resolution = this.Resolution;
-		for (const path of this.PathInstances) path.Destroy();
-		table.clear(this.PathInstances);
-		this.Resolution = 0;
-		this.SetResolution(resolution)
+		return tracer;
 	}
 }
 
 export namespace BezierCurveDisplay {
-	export interface Instance extends Model {
-		Humanoid: Humanoid // hack for highlight on transparent things
-		Highlight: Highlight
-		Points: Folder
-		Path: Folder
-	}
-
-	export const enum VisualColorDataSource {
-		Curvature = "Curvature",
-		Direction = "Direction",
-		Velocity = "Velocity",
-		Random = "Random",
-		None = "None"
-	}
-
-	export interface InitializationOptions {
-		Resolution: number,
-		SizeParts: boolean,
-		VisualizeWithColor: VisualColorDataSource
-	}
-
-	export interface SimpleRenderTimings {
-		Detail: "Light",
-		Total: number,
-	}
-
-	export interface DetailedRenderTimings extends Omit<SimpleRenderTimings, "Detail"> {
-		Detail: "Complex"
-		Computation: number
-	}
-
-	export type RenderTimings =
-		|   SimpleRenderTimings
-		| DetailedRenderTimings
+	export type Instance = typeof BezierCurveDisplay["InstanceTemplate"]
 }
-
-const gradient = new ColorSequence([
-	new ColorSequenceKeypoint(0, new Color3(0, 1, 0)),
-	new ColorSequenceKeypoint(0.3, new Color3(1, 1, 0)),
-	new ColorSequenceKeypoint(1, new Color3(1, 0, 0))
-])

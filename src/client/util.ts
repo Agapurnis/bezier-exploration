@@ -4,7 +4,7 @@ import { Point } from "./point";
 const player = game.GetService("Players").LocalPlayer;
 const mouse = player.GetMouse();
 
-const PhysicsService = game.GetService("PhysicsService")
+const RunService = game.GetService("RunService")
 const Players = game.GetService("Players")
 
 export function get_character(): Model {
@@ -43,4 +43,3 @@ export function get_point_on_cursor (ray_distance = 100): Point | undefined {
 	if (!hit) return undefined;
 	if (Point.TestInstance(hit.Instance)) return Point.GetPointFromInstance(hit.Instance);
 }
-

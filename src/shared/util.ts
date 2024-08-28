@@ -1,5 +1,15 @@
 import { Signal } from "@rbxts/beacon";
 
+declare const NullBrand: unique symbol
+export type Null = "null" & { _: typeof NullBrand };
+export const Null = "null" as Null;
+export function is_null    <T>(value: T): value is Extract<T, Null> { return value === "null" }
+export function is_not_null<T>(value: T): value is Exclude<T, Null> { return value !== "null" }
+export function not_null<T>(value: T): Exclude<T, Null> { if (is_not_null(value)) return value; error("Assertion failure!");   }
+export function unchecked_not_null<T>(value: T): Exclude<T, Null> { return value as Exclude<T, Null> }
+
+export type MaybeReadonly<T> = T | Readonly<T>
+
 export type SignalView<T> = Omit<Signal<T>,
 	| "Fire"
 	| "FireDeferred"
@@ -7,9 +17,21 @@ export type SignalView<T> = Omit<Signal<T>,
 	| "DisconnectAll"
 >
 
-export function round (value: number, digits: number) {
+export function round(value: number, digits: number) {
 	const mod = 10 ** digits;
 	return math.floor(value * mod) / mod
+}
+
+export function is_nan(value: number): boolean {
+	return value !== value
+}
+
+export function in_inclusive_range(test: number, min: number, max: number) {
+	return min <= test && test <= max
+}
+
+export function is_integer(value: number) {
+	return value % 1 === 0
 }
 
 /**
@@ -23,11 +45,12 @@ export function evaluate_color_sequence(sequence: ColorSequence, time: number): 
 		const nxt = sequence.Keypoints[i + 1];
 		if (time >= cur.Time && time <= nxt.Time) {
 			const blend = (time - cur.Time) / (nxt.Time - cur.Time);
-			return new Color3(
-                (nxt.Value.R - cur.Value.R) * blend + cur.Value.R,
-                (nxt.Value.G - cur.Value.G) * blend + cur.Value.G,
-                (nxt.Value.B - cur.Value.B) * blend + cur.Value.B
-            )
+			return nxt.Value.Lerp(cur.Value, blend)
+			// return new Color3(
+            //     (nxt.Value.R - cur.Value.R) * blend + cur.Value.R,
+            //     (nxt.Value.G - cur.Value.G) * blend + cur.Value.G,
+            //     (nxt.Value.B - cur.Value.B) * blend + cur.Value.B
+            // )
 		}
 	}
 	error("Bad! Got " + time);
@@ -64,4 +87,28 @@ export function make<
 export const enum CollisionGroup {
 	Character = "Character",
 	PointRay = "PointRay"
+}
+
+export function random_color(): Color3 {
+	return new Color3(
+		math.random(),
+		math.random(),
+		math.random()
+	)
+}
+
+export function assert_narrowed_unreachable(never?: never, reason?: string): never {
+   error("Unreachable!" + ((reason !== undefined) ? ": " + reason : ""))
+}
+export function assert_unreachable(reason?: string): never {
+	error("Unreachable!" + ((reason !== undefined) ? ": " + reason : ""))
+}
+
+/**
+ * @returns the output and the time it took in seconds
+ */
+export function timed<T, U extends unknown[]>(callback: (...args: U) => T, ...args: U): LuaTuple<[output: T, seconds: number]> {
+	const t = os.clock();
+	const v = callback(...args);
+	return $tuple(v, os.clock() - t)
 }
