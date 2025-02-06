@@ -7,11 +7,12 @@ import { BoundCompute, NullRepr } from "./curve-worker.client";
 import { selected_point } from "./state/selected_point";
 import { use_sound_effects } from "./state/sfx";
 import { BezierConfiguration, BezierConfigurationBuilder, ComputationMethod, is_measured_source, VisualColorDataSource } from "../shared/curve-configuration";
-import { ComputeCFrame, ComputeCurvature, CurveComputationStep, ComputeSize, DoCurveComputationStep, DoPathStepAndReturnMaxMeasured, GetBezierFunction, RunDeferredPathModifications, PathAccumulatedStepTimings, MergeTimings, RenderMillisecondTimings, DefaultAccumulablePathStepTimings } from "../shared/curve-rendering";
+import { ComputeCFrame, ComputeCurvature, CurveComputationStep, ComputeSize, DoCurveComputationStep, DoPathStepAndReturnMaxMeasured, GetBezierFunction, RunDeferredPathModifications, PathAccumulatedStepTimings, MergeTimings, RenderMillisecondTimings, DefaultAccumulablePathStepTimings, OrientationBasis } from "../shared/curve-rendering";
 import { Janitor } from "@rbxts/janitor";
 import WorkerOrchestrator from "./curve-worker-orchestrator"
 import { inspect } from "shared/internal/inspect";
 
+const AssetService = game.GetService("AssetService")
 const RunService = game.GetService("RunService")
 
 export class BezierCurveDisplay {
@@ -34,8 +35,14 @@ export class BezierCurveDisplay {
 		Children: {
 			Points: new Instance("Folder"),
 			Path: new Instance("Folder"),
+			Appearance: make("MeshPart", {
+				Size: Vector3.one,
+				Anchored: true,
+				Children: {
+					Editable: new Instance("EditableMesh")
+				}
+			}),
 			Tracers: new Instance("Folder"),
-			// Humanoid: new Instance("Humanoid"), // hack for highlight on transparent things
 			Highlight: make("Highlight", {
 				OutlineColor: new Color3(1, 1, 1),
 				FillTransparency: 1,
@@ -107,7 +114,6 @@ export class BezierCurveDisplay {
 		}
 
 		this.OnUpdate.Connect(() => {
-			// RunService.Stepped.Once(() => this.Render())
 			this.Render()
 			this.PlayTickSFX();
 		})
@@ -281,6 +287,97 @@ export class BezierCurveDisplay {
 	private DestinationsBuffer!: CFrame[]
 	private MeasuredScalarsBuffer: number[] | undefined
 
+	private vertices: number[] = [];
+
+	// private Rodrigues(vec: Vector3, axis: Vector3, angle: number) {
+	// 	const cos = math.cos(angle);
+	// 	return vec.mul(cos)
+	// 		.add(axis.Cross(vec).mul(math.sin(angle)))
+	// 		.add(axis.mul(axis.Dot(vec)).mul(1 - cos))
+	// }
+	// private vertices(cframes: CFrame[], radius: number, sides: number, action: "add" | "change") { // number[] {
+	// 	let j = 1;
+	// 	let normal = Vector3.xAxis;
+	// 	let binormal = cframes[0].LookVector.Cross(normal);
+	// 	for (const point of $range(1, cframes.size() - 1)) {
+	// 		const tangent =      cframes[point - 1].ToWorldSpace(OrientationBasis.Inverse()).LookVector
+	// 		const tangent_next = cframes[point    ].ToWorldSpace(OrientationBasis.Inverse()).LookVector;
+	// 		const rotation_axis = tangent.Cross(tangent_next);
+	// 		const rotation_angle = math.acos(tangent.Dot(tangent_next))
+
+	// 		normal = this.Rodrigues(normal, rotation_axis, rotation_angle);
+	// 		binormal = this.Rodrigues(binormal, rotation_axis, rotation_angle)
+
+	// 		const mesh = this.Instance.Appearance.Editable;
+	// 		for (const side of $range(0, sides - 1)) {
+	// 			const angle = (side / sides) * (2 * math.pi)
+	// 			const space = normal.mul(math.cos(angle)).add(binormal.mul(math.sin(angle)));
+	// 			const vertex = cframes[point - 1].Position.add(Vector3.xAxis.mul(radius).Cross(space))
+	// 			if (action === "add") {
+	// 				this.real_ong_vertices[j - 1] = mesh.AddVertex(vertex);
+	// 			} else {
+	// 				mesh.SetPosition(j, vertex);
+	// 			}
+	// 			j += 1;
+	// 		}
+	// 	}
+	// }
+
+	private calc_vertices(cframes: CFrame[], radius: number, sides: number, action: "add" | "change") { // number[] {
+		const mesh = this.Instance.Appearance.Editable;
+		let j = 1;
+		for (const point of $range(1, cframes.size())) {
+			const cframe = cframes[point - 1].ToWorldSpace(OrientationBasis.Inverse())
+			for (const side of $range(0, sides - 1)) {
+				const angle = (side / sides) * (2 * math.pi)
+				const translate = cframe.UpVector.mul(math.cos(angle)).add(cframe.RightVector.mul(math.sin(angle)));
+				const vertex = cframe.Position.add(translate.mul(radius))
+				if (action === "add") {
+					this.vertices[j - 1] = mesh.AddVertex(vertex);
+				} else {
+					task.wait()
+					mesh.SetPosition(this.vertices[j - 1], vertex);
+				}
+				j += 1;
+			}
+		}
+	}
+
+	private triangles(points: number, sides: number) {
+		const mesh = this.Instance.Appearance.Editable;
+		for (const point of $range(1, points - 1)) {
+			for (const side of $range(0, sides - 1)) {
+				const nxt = (side + 1) % sides;
+				const v0 = this.vertices[(point - 1) * sides + side]
+				const v1 = this.vertices[(point - 1) * sides + nxt ]
+				const v2 = this.vertices[(point + 0) * sides + side]
+				const v3 = this.vertices[(point + 0) * sides + nxt ]
+				mesh.AddTriangle(v0, v1, v2);
+				mesh.AddTriangle(v1, v3, v2);
+			}
+        }
+	}
+
+	private reset_mesh_stuff() {
+		const mesh = this.Instance.Appearance.Editable;
+		const triangles = mesh.GetTriangles();
+		for (const triangle of triangles) {
+			mesh.RemoveTriangle(triangle)
+		}
+		const vertices = mesh.GetVertices();
+		for (const vertex of vertices) {
+			mesh.RemoveVertex(vertex);
+		}
+
+		// this.Instance.Appearance.Editable.Destroy();
+		// BezierCurveDisplay.InstanceTemplate.Appearance.Editable.Clone().Parent = this.Instance.Appearance
+
+
+	}
+
+
+	private mesh = false;
+
 	/**
 	 * @returns the number of milliseconds it took, or nil if there weren't enough points to preform a render
 	 */
@@ -324,14 +421,19 @@ export class BezierCurveDisplay {
 						}
 					}
 
-					const deferred_timings = RunDeferredPathModifications(
-						this.PathInstances,
-						this.Resolution,
-						this.DestinationsBuffer,
-						this.ColorSource,
-						this.MeasuredScalarsBuffer,
-						max_measured
-					)
+					const deferred_timings = { BulkMove: 0 }
+
+					const sides = 15;
+
+					// this.reset_mesh_stuff();
+					if (!this.mesh) {
+						this.calc_vertices(this.DestinationsBuffer, 1, sides, "add")
+						this.triangles(this.DestinationsBuffer.size(), sides);
+						this.mesh = true;
+					} else {
+						this.calc_vertices(this.DestinationsBuffer, 1, sides, "change")
+					}
+
 
 					const timings = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
 					connection.Disconnect();
@@ -371,64 +473,64 @@ export class BezierCurveDisplay {
 	}
 
 
-	public RenderBlocking(): RenderMillisecondTimings | undefined {
-		if (!(this.Points.size() >= 3)) return undefined;
-		const bezier = this.Bezier;
-		const positions = this.GetPointPositions();
-		const start_time = os.clock()
-		const computed = table.create(5) as CurveComputationStep
-		const accumulated_step_timings = DefaultAccumulablePathStepTimings();
-		let computation_took = 0;
+	// public RenderBlocking(): RenderMillisecondTimings | undefined {
+	// 	if (!(this.Points.size() >= 3)) return undefined;
+	// 	const bezier = this.Bezier;
+	// 	const positions = this.GetPointPositions();
+	// 	const start_time = os.clock()
+	// 	const computed = table.create(5) as CurveComputationStep
+	// 	const accumulated_step_timings = DefaultAccumulablePathStepTimings();
+	// 	let computation_took = 0;
 
-		let max_measured: number | undefined = 0;
-		for (const step of $range(0, this.Resolution - 1)) {
-			computation_took += timed(() => DoCurveComputationStep(
-				bezier,
-				this.Resolution,
-				positions,
-				step / (this.Resolution - 1),
-				computed,
-				this.DoComputeVelocity,
-				this.DoComputeAcceleration,
-				this.DoComputeCurvature,
-				this.Size
-			))[1];
+	// 	let max_measured: number | undefined = 0;
+	// 	for (const step of $range(0, this.Resolution - 1)) {
+	// 		computation_took += timed(() => DoCurveComputationStep(
+	// 			bezier,
+	// 			this.Resolution,
+	// 			positions,
+	// 			step / (this.Resolution - 1),
+	// 			computed,
+	// 			this.DoComputeVelocity,
+	// 			this.DoComputeAcceleration,
+	// 			this.DoComputeCurvature,
+	// 			this.Size
+	// 		))[1];
 
 
-			max_measured = DoPathStepAndReturnMaxMeasured(
-				this.PathInstances[step],
-				step,
-				this.ColorSource,
-				this.DestinationsBuffer,
-				max_measured,
-				this.MeasuredScalarsBuffer,
-				accumulated_step_timings,
-				computed,
-			)
-		}
+	// 		max_measured = DoPathStepAndReturnMaxMeasured(
+	// 			this.PathInstances[step],
+	// 			step,
+	// 			this.ColorSource,
+	// 			this.DestinationsBuffer,
+	// 			max_measured,
+	// 			this.MeasuredScalarsBuffer,
+	// 			accumulated_step_timings,
+	// 			computed,
+	// 		)
+	// 	}
 
-		const deferred_timings = RunDeferredPathModifications(
-			this.PathInstances,
-			this.Resolution,
-			this.DestinationsBuffer,
-			this.ColorSource,
-			this.MeasuredScalarsBuffer,
-			max_measured
-		)
+	// 	const deferred_timings = RunDeferredPathModifications(
+	// 		this.PathInstances,
+	// 		this.Resolution,
+	// 		this.DestinationsBuffer,
+	// 		this.ColorSource,
+	// 		this.MeasuredScalarsBuffer,
+	// 		max_measured
+	// 	)
 
-		const timing = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
-		this.OnRenderBindable.Fire(timing);
-		BezierCurveDisplay.TotalRenderCount += 1;
-		this.RenderCount += 1;
-		return timing
-	}
+	// 	const timing = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
+	// 	this.OnRenderBindable.Fire(timing);
+	// 	BezierCurveDisplay.TotalRenderCount += 1;
+	// 	this.RenderCount += 1;
+	// 	return timing
+	// }
 
 	public async Render(): Promise<RenderMillisecondTimings | undefined>  {
-		if (this.Threads > 1) {
+		// if (this.Threads > 1) {
 			return this.RenderParallel()
-		} else {
-			return this.RenderBlocking()
-		}
+		// } else {
+		// 	return this.RenderBlocking()
+		// }
 	}
 
 	public Repool() {

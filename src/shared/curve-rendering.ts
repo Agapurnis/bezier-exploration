@@ -141,8 +141,6 @@ export function DoPathStepAndReturnMaxMeasured(
 	}
 }
 
-const geoservice = game.GetService("GeometryService")
-
 export interface DeferredPathModificationsTimings {
 	ColorEvaluation?: number,
 	ColorAssignment?: number,

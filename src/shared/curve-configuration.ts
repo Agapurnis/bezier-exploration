@@ -149,8 +149,8 @@ export class BezierConfigurationBuilder {
 
 	public Resolve(): BezierConfiguration {
 		const method = this.Method ??= ComputationMethod.Polynomic;
-		const velocity = this.Velocity ?? false;
-		const acceleration = this.Acceleration ?? (this.Curvature === true);
+		const velocity = this.Velocity ?? true;
+		const acceleration = true // this.Acceleration ?? (this.Curvature === true);
 		const curvature = this.Curvature ?? (velocity && acceleration)
 		const size = this.Size ?? acceleration;
 		const resolution = this.Resolution ?? 250

@@ -73,15 +73,18 @@ export class Point {
 	}
 
 	private EvaluateHighlightTransitionTarget(): HighlightTransitionDetails {
-		if (!this.IsSelected()) {
-			if (this.Held) error("Bad state!")
-			if (this.Hovered) return HighlightConfigurations.HOVERED_NON_SELECTED;
-			return HighlightConfigurations.INVISIBLE
-		} else {
-			if (this.Held) return HighlightConfigurations.SELECTED_HELD
-			if (this.Hovered) return HighlightConfigurations.SELECTED_HOVERED
-			return HighlightConfigurations.SELECTED
-		}
+		// FIXME
+		return HighlightConfigurations.INVISIBLE
+
+		// if (!this.IsSelected()) {
+		// 	if (this.Held) error("Bad state!")
+		// 	if (this.Hovered) return HighlightConfigurations.HOVERED_NON_SELECTED;
+		// 	return HighlightConfigurations.INVISIBLE
+		// } else {
+		// 	if (this.Held) return HighlightConfigurations.SELECTED_HELD
+		// 	if (this.Hovered) return HighlightConfigurations.SELECTED_HOVERED
+		// 	return HighlightConfigurations.SELECTED
+		// }
 	}
 
 	constructor (
