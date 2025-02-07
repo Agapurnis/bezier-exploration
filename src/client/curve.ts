@@ -300,7 +300,6 @@ export class BezierCurveDisplay {
 			const connection = WorkerOrchestrator.OnJobComplete.Event.Connect((chunk) => {
 				outputs[jobs_completed] = chunk;
 				jobs_completed += 1;
-				print(jobs_completed, '/', this.Threads)
 				if (jobs_completed === this.Threads) {
 					const accumulated_step_timings = DefaultAccumulablePathStepTimings();
 					const computation_took = os.clock() - start_time;

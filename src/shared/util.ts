@@ -45,12 +45,11 @@ export function evaluate_color_sequence(sequence: ColorSequence, time: number): 
 		const nxt = sequence.Keypoints[i + 1];
 		if (time >= cur.Time && time <= nxt.Time) {
 			const blend = (time - cur.Time) / (nxt.Time - cur.Time);
-			return nxt.Value.Lerp(cur.Value, blend)
-			// return new Color3(
-            //     (nxt.Value.R - cur.Value.R) * blend + cur.Value.R,
-            //     (nxt.Value.G - cur.Value.G) * blend + cur.Value.G,
-            //     (nxt.Value.B - cur.Value.B) * blend + cur.Value.B
-            // )
+			return new Color3(
+                (nxt.Value.R - cur.Value.R) * blend + cur.Value.R,
+                (nxt.Value.G - cur.Value.G) * blend + cur.Value.G,
+                (nxt.Value.B - cur.Value.B) * blend + cur.Value.B
+            )
 		}
 	}
 	error("Bad! Got " + time);
