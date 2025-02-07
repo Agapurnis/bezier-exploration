@@ -47,6 +47,8 @@ export class BezierCurveDisplay {
 	static {
 		this.TickAudio.Name = "Tick";
 		this.TickAudio.SoundId = "rbxassetid://9114065998"
+		this.TickAudio.Volume = 2;
+		this.TickAudio.TimePosition = 0.2;
 	}
 
 	private static readonly TracerTemplate = new Instance("Part")
@@ -457,7 +459,6 @@ export class BezierCurveDisplay {
 			this.LastSFXPlayed = now;
 			const sound = BezierCurveDisplay.TickAudio.Clone();
 			sound.PlaybackSpeed = math.clamp(0.9 + travel * 2, 0.7, 1.3) + (math.random() / (4 + travel * 3) - 0.125)
-			sound.TimePosition = 0.2;
 			sound.Ended.Once(() => sound.Destroy());
 			sound.Parent = part;
 			sound.Play()
