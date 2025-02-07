@@ -42,10 +42,7 @@ I suspect there's a better approach to achieving this, but it was quite fun to d
 One exception is that since the coefficient tables are cached in each thread for every degree, memory usage can be moderately impacted.
 
 ## TODO
-- Fix De Casteljau implementation
 - Review implementation of integration for length computation
-- Fix tracing part appearing for one frame upon initial click
-- Fix highlight selection breaking
 - Improve UI
  - Visual composition
  - Synchronize changes when default values based off of another one are changed
@@ -54,5 +51,4 @@ One exception is that since the coefficient tables are cached in each thread for
 	 If the resolution changes, the thread count will change if it hasn't been explicitly set by the user.
 	 However, this will not be reflected on the UI, and there isn't any way to go back to the original behavior afterwards.
 	 This is not ideal.
-	-->
-- Experiment with [mesh generation](https://create.roblox.com/docs/reference/engine/classes/EditableMesh) instead of using parts
+	-->s

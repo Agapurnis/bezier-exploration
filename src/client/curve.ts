@@ -54,7 +54,8 @@ export class BezierCurveDisplay {
 		this.TracerTemplate.Name = "Tracer"
 		this.TracerTemplate.Material = Enum.Material.SmoothPlastic;
 		this.TracerTemplate.Anchored = true;
-		this.TracerTemplate.Size = Vector3.one.mul(1.5)
+		this.TracerTemplate.Size = Vector3.one.mul(1.5);
+		this.TracerTemplate.Transparency = 1;
 	}
 
 	private static readonly InstanceMapping = new WeakMap<BezierCurveDisplay.Instance, BezierCurveDisplay>();
@@ -470,16 +471,23 @@ export class BezierCurveDisplay {
 		let elapsed = 0;
 
 		const janitor = new Janitor();
-		janitor.Add(tracer.Destroying.Connect(() => janitor.Destroy()))
 		janitor.Add(this.OnUpdate.Connect(() => positions = this.GetPointPositions()))
 		janitor.Add(RunService.Heartbeat.Connect((delta) => {
 			const progress = (elapsed / seconds)
-			if (progress > 1) return tracer.Destroy();
+			if (progress > 1) {
+				janitor.Destroy();
+				task.wait(0.25);
+				tracer.Destroy();
+			}
 			const position = this.Bezier(positions, progress);
 			const velocity = this.Bezier(positions, progress, 1)
 			tracer.CFrame = CFrame.lookAlong(position, velocity).mul(BezierCurveDisplay.OrientationBasis);
 			elapsed += delta;
 		}));
+
+		RunService.Heartbeat.Once(() => {
+			tracer.Transparency = 0;
+		})
 
 		return tracer;
 	}
