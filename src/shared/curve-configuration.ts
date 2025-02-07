@@ -87,12 +87,15 @@ export class BezierConfigurationBuilder {
 	public WithResolution(resolution: number): this {
 		if (resolution < 1 || !is_integer(resolution)) error("Resolution must be a positive integer above one!");
 		if (this.Threads !== undefined && resolution < this.Threads) error("Resolution cannot be lower than the thread count!")
+		print("new res", resolution)
 		this.Resolution = resolution;
 		return this
 	}
 
 	public WithThreads(threads: number): this {
-		if (threads < 1 || !is_integer(threads)) error("Thread count must be a positive non-zero integer!");
+		if (threads < 0 || !is_integer(threads)) error("Thread count must be a positive integer, or zero!");
+		if (threads === 0) print("Computation will be done on the same thread.")
+		if (threads === 1) print("Computation will be done on a singular spawned thread. To do it on the same thread, indicate zero threads.")
 		if (this.Resolution !== undefined && threads > this.Resolution) error("Thread count cannot be higher than the resolution!");
 		this.Threads = threads;
 		return this

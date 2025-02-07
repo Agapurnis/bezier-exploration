@@ -47,5 +47,12 @@ One exception is that since the coefficient tables are cached in each thread for
 - Fix tracing part appearing for one frame upon initial click
 - Fix highlight selection breaking
 - Improve UI
+ - Visual composition
+ - Synchronize changes when default values based off of another one are changed
+ <!--
+   The thread count defaults to a number based on the current resolution.
+	 If the resolution changes, the thread count will change if it hasn't been explicitly set by the user.
+	 However, this will not be reflected on the UI, and there isn't any way to go back to the original behavior afterwards.
+	 This is not ideal.
+	-->
 - Experiment with [mesh generation](https://create.roblox.com/docs/reference/engine/classes/EditableMesh) instead of using parts
-

@@ -1,15 +1,16 @@
 //!native
 import { Signal } from "@rbxts/beacon";
 import { bezier_length, BezierInput } from "shared/bezier";
-import { make, SignalView } from "shared/util";
+import { make, SignalView, timed } from "shared/util";
 import { Point } from "./point";
 import { BoundCompute } from "./curve-worker.client";
 import { selected_point } from "./state/selected_point";
 import { use_sound_effects } from "./state/sfx";
 import { BezierConfiguration, BezierConfigurationBuilder, ComputationMethod, is_measured_source, VisualColorDataSource } from "../shared/curve-configuration";
-import { CurveComputationStep, DoPathStepAndReturnMaxMeasured, GetBezierFunction, RunDeferredPathModifications, MergeTimings, RenderMillisecondTimings, DefaultAccumulablePathStepTimings } from "../shared/curve-rendering";
+import { CurveComputationStep, DoPathStepAndReturnMaxMeasured, GetBezierFunction, RunDeferredPathModifications, MergeTimings, RenderMillisecondTimings, DefaultAccumulablePathStepTimings, DoCurveComputationStep } from "../shared/curve-rendering";
 import { Janitor } from "@rbxts/janitor";
 import WorkerOrchestrator from "./curve-worker-orchestrator"
+import { inspect } from "shared/internal/inspect";
 
 const RunService = game.GetService("RunService")
 
@@ -234,10 +235,13 @@ export class BezierCurveDisplay {
 	}
 
 	private SetThreads (count: number) {
-		if (count <= 0) error("Invalid thread count!");
-		count = (count === 1) ? 0 : count // 1 thread = no spawned actors
-		WorkerOrchestrator.AdjustQuantity(count).await();
+		if (count < 0) error("Invalid thread count!");
 		this.Threads = count;
+		this.EnsureCorrectWorkerCount();
+	}
+
+	private EnsureCorrectWorkerCount(count = this.Threads) {
+		WorkerOrchestrator.AdjustQuantity(count).await();
 	}
 
 	public GetLength(): number {
@@ -285,6 +289,7 @@ export class BezierCurveDisplay {
 		if (!(this.Points.size() >= 3)) return Promise.resolve(undefined);
 		let jobs_completed = 0;
 
+		this.EnsureCorrectWorkerCount();
 		const actors = WorkerOrchestrator.GetActors()
 		const positions = table.freeze(this.GetPointPositions());
 		const outputs = new Array<defined[]>(this.Threads)
@@ -295,6 +300,7 @@ export class BezierCurveDisplay {
 			const connection = WorkerOrchestrator.OnJobComplete.Event.Connect((chunk) => {
 				outputs[jobs_completed] = chunk;
 				jobs_completed += 1;
+				print(jobs_completed, '/', this.Threads)
 				if (jobs_completed === this.Threads) {
 					const accumulated_step_timings = DefaultAccumulablePathStepTimings();
 					const computation_took = os.clock() - start_time;
@@ -368,64 +374,64 @@ export class BezierCurveDisplay {
 	}
 
 
-	// public RenderBlocking(): RenderMillisecondTimings | undefined {
-	// 	if (!(this.Points.size() >= 3)) return undefined;
-	// 	const bezier = this.Bezier;
-	// 	const positions = this.GetPointPositions();
-	// 	const start_time = os.clock()
-	// 	const computed = table.create(5) as CurveComputationStep
-	// 	const accumulated_step_timings = DefaultAccumulablePathStepTimings();
-	// 	let computation_took = 0;
+	public RenderSingleThreaded(): RenderMillisecondTimings | undefined {
+		if (!(this.Points.size() >= 3)) return undefined;
+		const bezier = this.Bezier;
+		const positions = this.GetPointPositions();
+		const start_time = os.clock()
+		const computed = table.create(5) as CurveComputationStep
+		const accumulated_step_timings = DefaultAccumulablePathStepTimings();
+		let computation_took = 0;
 
-	// 	let max_measured: number | undefined = 0;
-	// 	for (const step of $range(0, this.Resolution - 1)) {
-	// 		computation_took += timed(() => DoCurveComputationStep(
-	// 			bezier,
-	// 			this.Resolution,
-	// 			positions,
-	// 			step / (this.Resolution - 1),
-	// 			computed,
-	// 			this.DoComputeVelocity,
-	// 			this.DoComputeAcceleration,
-	// 			this.DoComputeCurvature,
-	// 			this.Size
-	// 		))[1];
+		let max_measured: number | undefined = 0;
+		for (const step of $range(0, this.Resolution - 1)) {
+			computation_took += timed(() => DoCurveComputationStep(
+				bezier,
+				this.Resolution,
+				positions,
+				step / (this.Resolution - 1),
+				computed,
+				this.DoComputeVelocity,
+				this.DoComputeAcceleration,
+				this.DoComputeCurvature,
+				this.Size
+			))[1];
 
 
-	// 		max_measured = DoPathStepAndReturnMaxMeasured(
-	// 			this.PathInstances[step],
-	// 			step,
-	// 			this.ColorSource,
-	// 			this.DestinationsBuffer,
-	// 			max_measured,
-	// 			this.MeasuredScalarsBuffer,
-	// 			accumulated_step_timings,
-	// 			computed,
-	// 		)
-	// 	}
+			max_measured = DoPathStepAndReturnMaxMeasured(
+				this.PathInstances[step],
+				step,
+				this.ColorSource,
+				this.DestinationsBuffer,
+				max_measured,
+				this.MeasuredScalarsBuffer,
+				accumulated_step_timings,
+				computed,
+			)
+		}
 
-	// 	const deferred_timings = RunDeferredPathModifications(
-	// 		this.PathInstances,
-	// 		this.Resolution,
-	// 		this.DestinationsBuffer,
-	// 		this.ColorSource,
-	// 		this.MeasuredScalarsBuffer,
-	// 		max_measured
-	// 	)
+		const deferred_timings = RunDeferredPathModifications(
+			this.PathInstances,
+			this.Resolution,
+			this.DestinationsBuffer,
+			this.ColorSource,
+			this.MeasuredScalarsBuffer,
+			max_measured
+		)
 
-	// 	const timing = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
-	// 	this.OnRenderBindable.Fire(timing);
-	// 	BezierCurveDisplay.TotalRenderCount += 1;
-	// 	this.RenderCount += 1;
-	// 	return timing
-	// }
+		const timing = MergeTimings(accumulated_step_timings, deferred_timings, computation_took, start_time)
+		this.OnRenderBindable.Fire(timing);
+		BezierCurveDisplay.TotalRenderCount += 1;
+		this.RenderCount += 1;
+		return timing
+	}
 
 	public async Render(): Promise<RenderMillisecondTimings | undefined>  {
-		// if (this.Threads > 1) {
+		if (this.Threads > 0) {
 			return this.RenderParallel()
-		// } else {
-		// 	return this.RenderBlocking()
-		// }
+		} else {
+			return this.RenderSingleThreaded()
+		}
 	}
 
 	public Repool() {
