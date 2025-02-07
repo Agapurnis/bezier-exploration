@@ -9,7 +9,6 @@ import { EditorCurvesList } from "../components/EditorCurvesList";
 import { EditorPointsList } from "../components/EditorPointsList";
 import { ButtonLabelledTextInput } from "../components/ButtonLabelledTextInput";
 import { selected_curve } from "client/state/selected_curve";
-import { Janitor } from "@rbxts/janitor";
 import { make, round } from "shared/util";
 import { OutcomeDisplay } from "../components/OutcomeDisplay";
 import { ComputationMethod, VisualColorDataSource } from "shared/curve-configuration";

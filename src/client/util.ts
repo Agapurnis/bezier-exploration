@@ -4,7 +4,6 @@ import { Point } from "./point";
 const player = game.GetService("Players").LocalPlayer;
 const mouse = player.GetMouse();
 
-const RunService = game.GetService("RunService")
 const Players = game.GetService("Players")
 
 export function get_character(): Model {

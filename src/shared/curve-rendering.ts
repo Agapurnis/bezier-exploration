@@ -1,7 +1,6 @@
 import { BezierInput, de_casteljau_bezier, polynomic_bezier, polynomic_bezier_horners } from "shared/bezier";
 import { ComputationMethod, is_measured_source, VisualColorDataSource } from "./curve-configuration";
-import { CollisionGroup, evaluate_color_sequence, is_not_null, not_null, Null, random_color, timed, unchecked_not_null } from "./util";
-import { inspect } from "./internal/inspect";
+import { evaluate_color_sequence, is_not_null, Null, random_color, timed, unchecked_not_null } from "./util";
 
 export function ComputeCFrame(position: Vector3, velocity: Vector3 | Null, basis: CFrame) {
 	return is_not_null(velocity)

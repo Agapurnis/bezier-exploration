@@ -1,9 +1,7 @@
 //!native
 
-import { adaptive_guass_legendre_quadrature, gauss_legendre_quadrature } from "./integration";
-import { flerp, glerp } from "./internal/lerp";
+import { adaptive_guass_legendre_quadrature } from "./integration";
 import { AddOp, ScalarMultiplyOp, SubtractOp } from "./ops";
-import { kahan } from "./sum";
 
 type   MutableBezierInput<T> = [start: T, ...control: Array<T>, end: T]
 type ImmutableBezierInput<T> = Readonly<MutableBezierInput<T>>
@@ -25,12 +23,6 @@ function factorial(n: number) {
 		sum *= n;
 	}
 	return n
-}
-
-function combinations(set: number, pick: number) {
-	const sf = factorial(set);
-	const sp = factorial(pick);
-	return sf / (factorial(pick) * factorial(set - pick))
 }
 
 const pascal_halves: Array<Array<number>> = new Array(10)
@@ -170,8 +162,6 @@ export function polynomic_bezier_horners<T extends number | Interpolatable>(
 	const coefficients = get_bernstein_coefficients(degree, derivative);
 	let sum = (points[degree] as number) * math.pow(progress, degree - derivative) * coefficients[0]
 	let coefficient_index = 1;
-
-	print(progress, coefficients[0], coefficients[math.ceil((coefficients.size() - 1) / 2)], coefficients[coefficients.size() - 1])
 
 	for (const index of $range(degree - 1, 0, -1)) {
 		let scale = coefficients[coefficient_index]; coefficient_index += 1;

@@ -75,10 +75,12 @@ export function make<
 	}
 	// eslint-disable-next-line roblox-ts/no-array-pairs
 	if (properties.Children !== undefined) for (const [name, child] of pairs(properties.Children)) {
-		if ((child as Instance).Name === (child as Instance).ClassName) {
-			(child as Instance).Name = name as string;
+		if (typeIs(child, "Instance")) {
+			if (child.Name === child.ClassName) {
+				child.Name = name as string;
+			}
+			child.Parent = instance;
 		}
-		(child as Instance).Parent = instance;
 	}
 	if ("Parent" in properties) instance.Parent = properties.Parent as Instance
 	return instance as CreatableInstances[T] & (U extends undefined ? unknown : U)

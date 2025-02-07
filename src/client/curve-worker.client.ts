@@ -1,7 +1,6 @@
 //!native
 import { ComputationMethod } from "shared/curve-configuration";
-import { ComputeCurvature, CurveComputationStep, ComputeSize, DoCurveComputationStep, GetBezierFunction } from "shared/curve-rendering"
-import { inspect } from "shared/internal/inspect";
+import { CurveComputationStep, DoCurveComputationStep, GetBezierFunction } from "shared/curve-rendering"
 import { MaybeReadonly } from "shared/util";
 
 const actor = script.GetActor();
